@@ -1,0 +1,9 @@
+
+# output files
+*.exe
+intml
+*.o
+lex.yy.*
+*.output
+grammar.tab.*
+
