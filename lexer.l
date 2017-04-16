@@ -5,8 +5,6 @@
 #include "symbols.h"
 #include "grammar.tab.h"
 
-extern int yylineno;
-
 %}
 
 INT     [1-9][0-9]*
@@ -45,16 +43,17 @@ WS      [ \t\f\v\r]
 let             { return LET; }
 in              { return IN; }
 type            { return TYPE; }
-"()"            { return UNIT; }
 
  /* built in types*/
 {INT}           { yylval.intVal = atoi(yytext); return INT; }
+"()"            { return UNIT; }
 
 {ID}            { yylval.identifier = symbol(yytext); return ID; }
 {TYPE}          { yylval.identifier = symbol(yytext); return TYPE; }
  /* punctuation */
+"->"            { return ARROW; }
 "<="            { return LE; }
-[-+*/=<=()]     { return yytext[0]; }
+[-+*/=<=():]    { return yytext[0]; }
 
 {WS}            ; /* Drop whitespace */
 [\n]            { ++yylineno; }

@@ -63,7 +63,6 @@ Declaration* func(Symbol* name, ParamList* params, Expr* body)
     return result;
 }
 
-
 Declaration* binding(Symbol* name, Expr* init)
 {
     Declaration* result = xmalloc(sizeof *result);
@@ -73,11 +72,26 @@ Declaration* binding(Symbol* name, Expr* init)
     return result;
 }
 
-Param* param(Symbol* name)
+Declaration* type(Symbol* name, TypeExpr* definition)
+{
+    Declaration* result = xmalloc(sizeof *result);
+    result->tag = DECL_TYPE;
+    result->type.name = name;
+    result->type.definition = definition;
+    return result;
+}
+
+Param* param_with_type(Symbol* name, TypeExpr* type)
 {
     Param* param = xmalloc(sizeof *param);
     param->name = name;
+    param->type = type;
     return param;
+
+}
+Param* param(Symbol* name)
+{
+    return param_with_type(name, NULL);
 }
 
 ParamList* add_param(ParamList* list, Param* param)
@@ -116,7 +130,7 @@ static Expr* binexpr(int tag, Expr* left, Expr* right)
     result->tag = tag;
     result->left = left;
     result->right = right;
-    result->type_info = NULL;
+    result->type = NULL;
     return result;
 }
 Expr* plus(Expr* left, Expr* right)
@@ -153,14 +167,14 @@ Expr* apply(Expr* left, Expr* right)
     return binexpr(APPLY, left, right);
 }
 
-static Expr* expr(int tag)
+static Expr* expr(enum ExprTag tag)
 {
     Expr* expr = xmalloc(sizeof *expr);
     expr->tag = tag;
     /*
      * NULL out the type info because that will be deduced later
      */
-    expr->type_info = NULL;
+    expr->type= NULL;
     return expr;
 }
 
@@ -206,17 +220,87 @@ Expr* local_binding(Symbol* name, Expr* init, Expr* subexpr)
     return result;
 }
 
+static TypeExpr* typexpr(enum TypeExprTag tag)
+{
+    TypeExpr* result = xmalloc(sizeof *result);
+    result->tag = tag;
+    return result;
+}
+
+TypeExpr* typearrow(TypeExpr* left, TypeExpr* right)
+{
+    TypeExpr* result = typexpr(TYPE_ARROW);
+    result->left = left;
+    result->right = right;
+    return result;
+}
+
+TypeExpr* typename(Symbol* name)
+{
+    TypeExpr* result = typexpr(TYPE_NAME);
+    result->name = name;
+    return result;
+}
+
+
 /*----------------------------------------*\
  * Fns for printing the AST               *
 \*----------------------------------------*/
 
-void print_params(FILE* out, ParamList* params);
+void print_typexpr(FILE* out, TypeExpr* expr)
+{
+    fputc('(', out);
+    switch (expr->tag) {
+    case TYPE_NAME:
+        fprintf(out, "name %s", expr->name);
+        break;
+    case TYPE_ARROW:
+        fputs("-> ", out);
+        print_typexpr(out, expr->left);
+        print_typexpr(out, expr->right);
+        break;
+    }
+    fputc(')', out);
+}
+
+void print_params(FILE* out, ParamList* params)
+{
+    fputc('(', out);
+    const char* prefix = ""; // all but first get space prefix
+    for (ParamList* c = params; c; c = c->next) {
+        fputs(prefix, out);
+        if (c->param->type) {
+            fprintf(out, "(param %s : ", c->param->name);
+            print_typexpr(out, c->param->type);
+            fputs(")", out);
+        } else {
+            fprintf(out, "(param %s)", c->param->name);
+        }
+        prefix = " ";
+    }
+    fputc(')', out);
+}
 
 void print_expr(FILE* out, Expr* expr)
 {
     fputc('(', out);
     const char* sym[9] = {"", "+", "-", "*", "/", "=", "<", "<=", "apply"};
     switch (expr->tag) {
+    // type out all enum members to get exhaustiveness checking from the
+    // compiler
+    case PLUS:
+    case MINUS:
+    case MULTIPLY:
+    case DIVIDE:
+    case EQUAL:
+    case LESSTHAN:
+    case LESSEQUAL:
+    case APPLY:
+        fprintf(out, "%s ", sym[expr->tag]);
+        print_expr(out, expr->left);
+        fputc(' ', out);
+        print_expr(out, expr->right);
+        break;
     case VAR:
         fprintf(out, "var %s", expr->var);
         break;
@@ -237,53 +321,28 @@ void print_expr(FILE* out, Expr* expr)
         fputs(" 'in ", out);
         print_expr(out, expr->binding.subexpr);
         break;
-    default:
-        fprintf(out, "%s ", sym[expr->tag]);
-        print_expr(out, expr->left);
-        fputc(' ', out);
-        print_expr(out, expr->right);
-        break;
     }
     fputc(')', out);
 }
 
-void print_params(FILE* out, ParamList* params)
-{
-    fputc('(', out);
-    for (ParamList* c = params; c; c = c->next) {
-        fprintf(out, "(param %s) ", c->param->name);
-    }
-    fputc('\b', out);
-    fputc(')', out);
-}
 
 void print_declaration(FILE* out, Declaration* decl)
 {
     fputc('(', out);
     switch (decl->tag) {
-        case DECL_FUNC:
-        {
-            fprintf(out, "func %s ", decl->func.name);
-            print_params(out, decl->func.params);
-            print_expr(out, decl->func.body);
-            break;
-        }
-        case DECL_BIND:
-        {
-            fprintf(out, "let %s ", decl->binding.name);
-            print_expr(out, decl->binding.init);
-            break;
-        }
-        case DECL_TYPE:
-        {
-            fprintf(out, "type %s", decl->type.name);
-            break;
-        }
-        default:
-        {
-            assert(0);
-            break;
-        }
+    case DECL_FUNC:
+        fprintf(out, "func %s ", decl->func.name);
+        print_params(out, decl->func.params);
+        print_expr(out, decl->func.body);
+        break;
+    case DECL_BIND:
+        fprintf(out, "let %s ", decl->binding.name);
+        print_expr(out, decl->binding.init);
+        break;
+    case DECL_TYPE:
+        fprintf(out, "type %s ", decl->type.name);
+        print_typexpr(out, decl->type.definition);
+        break;
     }
     fputc(')', out);
 }
@@ -291,10 +350,12 @@ void print_declaration(FILE* out, Declaration* decl)
 void print_tree(FILE* out, DeclarationList* root)
 {
     fputc('(', out);
+    const char* prefix = "";
     for (DeclarationList* c = root; c; c = c->next) {
+        fputs(prefix, out);
         print_declaration(out, c->declaration);
-        fputc(' ', out);
+        prefix = "\n "; // prefix all but first with space
     }
-    fputs("\b)", out);
+    fputs(")", out);
 }
 

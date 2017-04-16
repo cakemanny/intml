@@ -10,7 +10,7 @@ LEX=flex
 LFLAGS=
 
 # Use default rule...
-intml.exe: grammar.tab.o lex.yy.o ast.o symbols.o
+intml: grammar.tab.o lex.yy.o ast.o symbols.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 grammar.tab.h grammar.tab.c: grammar.y

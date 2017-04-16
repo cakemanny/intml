@@ -1,9 +1,8 @@
 
-(*
-type
-*)
+type intop = int -> int -> int
+type intfunc = int -> int
 
-let f x = x * x
+let f (x : int -> int) = x  x
 
 let y x =
     let f y z = y * z in

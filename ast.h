@@ -14,7 +14,8 @@ struct Param;
 struct Expr;
 struct FuncExpr;
 struct BindExpr;
-struct TypeInfo;
+struct TypeExpr;
+struct TypeExpr;
 
 // typedef everything to make it all nicer to read and type
 typedef struct DeclarationList DeclarationList;
@@ -27,7 +28,7 @@ typedef struct Param Param;
 typedef struct Expr Expr;
 typedef struct FuncExpr FuncExpr;
 typedef struct BindExpr BindExpr;
-typedef struct TypeInfo TypeInfo;
+typedef struct TypeExpr TypeExpr;
 
 /* define our tree */
 
@@ -49,7 +50,7 @@ struct Binding {
 
 struct Type {
     Symbol* name;
-    /* TODO define type trees */
+    TypeExpr* definition;
 };
 
 struct Declaration {
@@ -75,6 +76,7 @@ struct ParamList {
 struct Param {
     Symbol* name;
     /* we may want to be able to add type info here */
+    TypeExpr* type;
 };
 
 
@@ -117,7 +119,21 @@ struct Expr {
         BindExpr    binding;
     };
     /* We will want to be able to type all our expressions */
-    TypeInfo*   type_info;
+    TypeExpr*   type;
+};
+
+struct TypeExpr {
+    enum TypeExprTag {
+        TYPE_NAME = 1,
+        TYPE_ARROW
+    } tag;
+    union {
+        struct {
+            TypeExpr* left;
+            TypeExpr* right;
+        };
+        Symbol* name;
+    };
 };
 
 /*
@@ -155,9 +171,19 @@ Declaration* func(Symbol* name, ParamList* params, Expr* body);
 Declaration* binding(Symbol* name, Expr* init);
 
 /*
+ * Creates a type declaration node
+ */
+Declaration* type(Symbol* name, TypeExpr* definition);
+
+/*
  * Construct a param node from a symbol
  */
 Param* param(Symbol* name);
+
+/*
+ * Construct a node with already attached type info
+ */
+Param* param_with_type(Symbol* name, TypeExpr* expr);
 
 /*
  * Returns a new list with node as the head
@@ -219,5 +245,16 @@ Expr* local_func(Symbol* name, ParamList* params, Expr* body, Expr* subexpr);
  */
 Expr* local_binding(Symbol* name, Expr* init, Expr* subexpr);
 
+/*
+ * Creates a function type expression
+ * 'a -> 'b
+ */
+TypeExpr* typearrow(TypeExpr* left, TypeExpr* right);
+
+/*
+ * Creates a function expression that is just a name
+ * e.g. int, unit, float
+ */
+TypeExpr* typename(Symbol* name);
 
 #endif // __AST_H__
