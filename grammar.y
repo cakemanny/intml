@@ -3,6 +3,7 @@
 #include <string.h>
 #include "ast.h"
 #include "symbols.h"
+#include "types_and_vars.h"
 
 extern int yylex();
 static void yyerror(const char* msg);
@@ -24,7 +25,7 @@ DeclarationList* tree = NULL;
 
 /* terminals */
     int                 intVal;
-    Symbol*             identifier;
+    Symbol              identifier;
 }
 
 %token LET TYPE IN
@@ -130,12 +131,19 @@ void yyerror(const char* msg)
 
 int main(int argc, char* argv[])
 {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-v") == 0) {
+            debug_type_checker = 1;
+            break;
+        }
+    }
     yyparse();
     if (tree) {
         print_tree(stdout, tree);
         printf("\n");
 
         // type check!
+        type_check_tree(tree);
     }
 }
 

@@ -7,14 +7,14 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-Symbol* default_table[1024];
+Symbol default_table[1024];
 
-Symbol** table = default_table;
+Symbol* table = default_table;
 size_t table_capcity = 1024;
 size_t table_len = 0;
 
 
-Symbol* symbol(const char* str)
+Symbol symbol(const char* str)
 {
     for (int i = 0; i < table_len; i++) {
         if (str == table[i] || strcmp(str, table[i]) == 0) {
@@ -23,7 +23,7 @@ Symbol* symbol(const char* str)
     }
     if (!(table_len < table_capcity)) {
         // reallocate
-        Symbol** tmp = calloc(2 * table_capcity, sizeof *table);
+        Symbol* tmp = calloc(2 * table_capcity, sizeof *table);
         if (!tmp) {
             fprintf(stderr, "symbols: out of memory\n");
             abort();

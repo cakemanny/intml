@@ -53,26 +53,28 @@ DeclarationList* reverse_declarations(DeclarationList* list)
     return newhead;
 }
 
-Declaration* func(Symbol* name, ParamList* params, Expr* body)
+Declaration* func(Symbol name, ParamList* params, Expr* body)
 {
     Declaration* result = xmalloc(sizeof *result);
     result->tag = DECL_FUNC;
     result->func.name = name;
     result->func.params = params;
     result->func.body = body;
+    result->func.type = NULL;
     return result;
 }
 
-Declaration* binding(Symbol* name, Expr* init)
+Declaration* binding(Symbol name, Expr* init)
 {
     Declaration* result = xmalloc(sizeof *result);
     result->tag = DECL_BIND;
     result->binding.name = name;
     result->binding.init = init;
+    result->binding.type = NULL;
     return result;
 }
 
-Declaration* type(Symbol* name, TypeExpr* definition)
+Declaration* type(Symbol name, TypeExpr* definition)
 {
     Declaration* result = xmalloc(sizeof *result);
     result->tag = DECL_TYPE;
@@ -81,7 +83,7 @@ Declaration* type(Symbol* name, TypeExpr* definition)
     return result;
 }
 
-Param* param_with_type(Symbol* name, TypeExpr* type)
+Param* param_with_type(Symbol name, TypeExpr* type)
 {
     Param* param = xmalloc(sizeof *param);
     param->name = name;
@@ -89,7 +91,7 @@ Param* param_with_type(Symbol* name, TypeExpr* type)
     return param;
 
 }
-Param* param(Symbol* name)
+Param* param(Symbol name)
 {
     return param_with_type(name, NULL);
 }
@@ -178,7 +180,7 @@ static Expr* expr(enum ExprTag tag)
     return expr;
 }
 
-Expr* var(Symbol* name)
+Expr* var(Symbol name)
 {
     Expr* result = expr(VAR);
     result->var = name;
@@ -199,7 +201,7 @@ Expr* intval(int value)
     return result;
 }
 
-Expr* local_func(Symbol* name, ParamList* params, Expr* body, Expr* subexpr)
+Expr* local_func(Symbol name, ParamList* params, Expr* body, Expr* subexpr)
 {
     Expr* result = expr(FUNC_EXPR);
     FuncExpr* func = &result->func;
@@ -210,7 +212,7 @@ Expr* local_func(Symbol* name, ParamList* params, Expr* body, Expr* subexpr)
     return result;
 }
 
-Expr* local_binding(Symbol* name, Expr* init, Expr* subexpr)
+Expr* local_binding(Symbol name, Expr* init, Expr* subexpr)
 {
     Expr* result = expr(BIND_EXPR);
     BindExpr* bind = &result->binding;
@@ -220,24 +222,24 @@ Expr* local_binding(Symbol* name, Expr* init, Expr* subexpr)
     return result;
 }
 
-static TypeExpr* typexpr(enum TypeExprTag tag)
+static struct TypeExpr* typexpr(enum TypeExprTag tag)
 {
-    TypeExpr* result = xmalloc(sizeof *result);
+    struct TypeExpr* result = xmalloc(sizeof *result);
     result->tag = tag;
     return result;
 }
 
 TypeExpr* typearrow(TypeExpr* left, TypeExpr* right)
 {
-    TypeExpr* result = typexpr(TYPE_ARROW);
+    struct TypeExpr* result = typexpr(TYPE_ARROW);
     result->left = left;
     result->right = right;
     return result;
 }
 
-TypeExpr* typename(Symbol* name)
+TypeExpr* typename(Symbol name)
 {
-    TypeExpr* result = typexpr(TYPE_NAME);
+    struct TypeExpr* result = typexpr(TYPE_NAME);
     result->name = name;
     return result;
 }
@@ -249,25 +251,25 @@ TypeExpr* typename(Symbol* name)
 
 void print_typexpr(FILE* out, TypeExpr* expr)
 {
-    fputc('(', out);
     switch (expr->tag) {
     case TYPE_NAME:
-        fprintf(out, "name %s", expr->name);
+        fprintf(out, "%s", expr->name);
         break;
     case TYPE_ARROW:
-        fputs("-> ", out);
+        fputc('(', out);
         print_typexpr(out, expr->left);
+        fputs(" -> ", out);
         print_typexpr(out, expr->right);
+        fputc(')', out);
         break;
     }
-    fputc(')', out);
 }
 
-void print_params(FILE* out, ParamList* params)
+void print_params(FILE* out, const ParamList* params)
 {
     fputc('(', out);
     const char* prefix = ""; // all but first get space prefix
-    for (ParamList* c = params; c; c = c->next) {
+    for (const ParamList* c = params; c; c = c->next) {
         fputs(prefix, out);
         if (c->param->type) {
             fprintf(out, "(param %s : ", c->param->name);
@@ -281,7 +283,7 @@ void print_params(FILE* out, ParamList* params)
     fputc(')', out);
 }
 
-void print_expr(FILE* out, Expr* expr)
+void print_expr(FILE* out, const Expr* expr)
 {
     fputc('(', out);
     const char* sym[9] = {"", "+", "-", "*", "/", "=", "<", "<=", "apply"};
@@ -326,7 +328,7 @@ void print_expr(FILE* out, Expr* expr)
 }
 
 
-void print_declaration(FILE* out, Declaration* decl)
+void print_declaration(FILE* out, const Declaration* decl)
 {
     fputc('(', out);
     switch (decl->tag) {
@@ -347,11 +349,11 @@ void print_declaration(FILE* out, Declaration* decl)
     fputc(')', out);
 }
 
-void print_tree(FILE* out, DeclarationList* root)
+void print_tree(FILE* out, const DeclarationList* root)
 {
     fputc('(', out);
     const char* prefix = "";
-    for (DeclarationList* c = root; c; c = c->next) {
+    for (const DeclarationList* c = root; c; c = c->next) {
         fputs(prefix, out);
         print_declaration(out, c->declaration);
         prefix = "\n "; // prefix all but first with space
