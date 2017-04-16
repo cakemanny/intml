@@ -9,6 +9,8 @@ static void yyerror(const char* msg);
 
 int yylineno = 1;
 
+DeclarationList* tree = NULL;
+
 %}
 
 %union {
@@ -17,6 +19,7 @@ int yylineno = 1;
     Declaration*        declaration;
     Expr*               expr;
     ParamList*          params;
+    Param*              param;
 
 /* terminals */
     int                 intVal;
@@ -32,20 +35,21 @@ int yylineno = 1;
 %type <declarations> program declarations
 %type <declaration> declaration letdecl
 %type <params> params
+%type <param> param
 %type <expr> expr letexpr
 
-%right LET
+%right LET      /* These are to make let bindings stick to top level if poss */
 %right IN       /* should be precedence in bison v3 */
 %left '='       /* right in assignments but left in expressions */
 %nonassoc '<' LE
 %left '+' '-'
 %left '*' '/'
-%left ID        /* function application */
+%left ID UNIT INT '('  /* function application */
 
 %%
 
 program:
-    declarations                { $$ = reverse_declarations($1); }
+    declarations                { tree = $$ = reverse_declarations($1); }
   ;
 declarations:
     declarations declaration    { $$ = add_declaration($1, $2); }
@@ -61,10 +65,12 @@ letdecl:
   | LET ID '=' expr             { $$ = binding($2, $4); }
   ;
 params:
-    params ID           { $$ = add_param($1, $2); }
-  | params UNIT         { $$ = add_param($1, symbol("()")); }
-  | ID                  { $$ = param_list($1); }
-  | UNIT                { $$ = param_list(symbol("()")); }
+    params param        { $$ = add_param($1, $2); }
+  | param               { $$ = param_list($1); }
+  ;
+param:
+    ID                  { $$ = param($1); }
+  | UNIT                { $$ = param(symbol("()")); }
   ;
 expr:
     letexpr             { $$ = $1; }
@@ -77,7 +83,12 @@ expr:
   | expr '<' expr       { $$ = lessthan($1, $3); }
   | expr LE expr        { $$ = lessequal($1, $3); }
     /* in real ML this should be "expr expr" */
-  | ID expr             { $$ = apply($1, $2); }
+    /* but we need to disammbiguate */
+  | expr ID             { $$ = apply($1, var($2)); }
+  | expr UNIT           { $$ = apply($1, unit_expr()); }
+  | expr INT            { $$ = apply($1, intval($2)); }
+  | expr '(' expr ')'   { $$ = apply($1, $3); }
+
   | ID                  { $$ = var($1); }
   | UNIT                { $$ = unit_expr(); }
   | INT                 { $$ = intval($1); }
@@ -105,5 +116,9 @@ void yyerror(const char* msg)
 int main(int argc, char* argv[])
 {
     yyparse();
+    if (tree) {
+        print_tree(stdout, tree);
+        printf("\n");
+    }
 }
 

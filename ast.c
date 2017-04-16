@@ -1,6 +1,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <assert.h>
 #include "ast.h"
 
 // convenience, check memory returned by malloc
@@ -72,25 +73,26 @@ Declaration* binding(Symbol* name, Expr* init)
     return result;
 }
 
-static Param* param(Symbol* name)
+Param* param(Symbol* name)
 {
     Param* param = xmalloc(sizeof *param);
     param->name = name;
     return param;
 }
-ParamList* add_param(ParamList* list, Symbol* name)
+
+ParamList* add_param(ParamList* list, Param* param)
 {
     ParamList* result = xmalloc(sizeof *result);
-    result->param = param(name);
+    result->param = param;
     result->next = list;
     return result;
 }
 
 
-ParamList* param_list(Symbol* name)
+ParamList* param_list(Param* param)
 {
     ParamList* list = xmalloc(sizeof *list);
-    list->param = param(name);
+    list->param = param;
     list->next = NULL;
     return list;
 }
@@ -146,9 +148,9 @@ Expr* lessequal(Expr* left, Expr* right)
     return binexpr(LESSEQUAL, left, right);
 }
 
-Expr* apply(Symbol* left, Expr* right)
+Expr* apply(Expr* left, Expr* right)
 {
-    return binexpr(APPLY, var(left), right);
+    return binexpr(APPLY, left, right);
 }
 
 static Expr* expr(int tag)
@@ -204,4 +206,95 @@ Expr* local_binding(Symbol* name, Expr* init, Expr* subexpr)
     return result;
 }
 
+/*----------------------------------------*\
+ * Fns for printing the AST               *
+\*----------------------------------------*/
+
+void print_params(FILE* out, ParamList* params);
+
+void print_expr(FILE* out, Expr* expr)
+{
+    fputc('(', out);
+    const char* sym[9] = {"", "+", "-", "*", "/", "=", "<", "<=", "apply"};
+    switch (expr->tag) {
+    case VAR:
+        fprintf(out, "var %s", expr->var);
+        break;
+    case INTVAL:
+        fprintf(out, "int %d", expr->intVal);
+        break;
+    case FUNC_EXPR:
+        fprintf(out, "func %s ", expr->func.name);
+        print_params(out, expr->func.params);
+        fputc(' ', out);
+        print_expr(out, expr->func.body);
+        fputs(" 'in ", out);
+        print_expr(out, expr->func.subexpr);
+        break;
+    case BIND_EXPR:
+        fprintf(out, "let %s ", expr->binding.name);
+        print_expr(out, expr->binding.init);
+        fputs(" 'in ", out);
+        print_expr(out, expr->binding.subexpr);
+        break;
+    default:
+        fprintf(out, "%s ", sym[expr->tag]);
+        print_expr(out, expr->left);
+        fputc(' ', out);
+        print_expr(out, expr->right);
+        break;
+    }
+    fputc(')', out);
+}
+
+void print_params(FILE* out, ParamList* params)
+{
+    fputc('(', out);
+    for (ParamList* c = params; c; c = c->next) {
+        fprintf(out, "(param %s) ", c->param->name);
+    }
+    fputc('\b', out);
+    fputc(')', out);
+}
+
+void print_declaration(FILE* out, Declaration* decl)
+{
+    fputc('(', out);
+    switch (decl->tag) {
+        case DECL_FUNC:
+        {
+            fprintf(out, "func %s ", decl->func.name);
+            print_params(out, decl->func.params);
+            print_expr(out, decl->func.body);
+            break;
+        }
+        case DECL_BIND:
+        {
+            fprintf(out, "let %s ", decl->binding.name);
+            print_expr(out, decl->binding.init);
+            break;
+        }
+        case DECL_TYPE:
+        {
+            fprintf(out, "type %s", decl->type.name);
+            break;
+        }
+        default:
+        {
+            assert(0);
+            break;
+        }
+    }
+    fputc(')', out);
+}
+
+void print_tree(FILE* out, DeclarationList* root)
+{
+    fputc('(', out);
+    for (DeclarationList* c = root; c; c = c->next) {
+        print_declaration(out, c->declaration);
+        fputc(' ', out);
+    }
+    fputs("\b)", out);
+}
 

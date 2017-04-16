@@ -120,7 +120,10 @@ struct Expr {
     TypeInfo*   type_info;
 };
 
-
+/*
+ * Print the AST
+ */
+void print_tree(FILE* out, DeclarationList* root);
 
 /*----------------------------------------*\
  * Some constructors and manipulator fns  *
@@ -152,14 +155,19 @@ Declaration* func(Symbol* name, ParamList* params, Expr* body);
 Declaration* binding(Symbol* name, Expr* init);
 
 /*
+ * Construct a param node from a symbol
+ */
+Param* param(Symbol* name);
+
+/*
  * Returns a new list with node as the head
  */
-ParamList* add_param(ParamList* list, Symbol* name);
+ParamList* add_param(ParamList* list, Param* param);
 
 /*
  * Creates list with a single param node which has the given name
  */
-ParamList* param_list(Symbol* name);
+ParamList* param_list(Param* param);
 
 /*
  * Returns a reversed param list
@@ -180,7 +188,7 @@ Expr* lessequal(Expr* left, Expr* right);
 /*
  * Creates a function application expression node
  */
-Expr* apply(Symbol* left, Expr* right);
+Expr* apply(Expr* left, Expr* right);
 
 /*
  * Creates an expression node for the use of a bound name

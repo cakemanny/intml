@@ -22,5 +22,5 @@ lex.yy.c: lexer.l
 .PHONY: clean
 
 clean:
-	rm -f inthtml.exe *.o lex.yy.c grammar.tab.{c,h} grammar.output
+	rm -f intml.exe *.o lex.yy.c grammar.tab.{c,h} grammar.output
 
