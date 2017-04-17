@@ -291,8 +291,90 @@ struct count_and_type {
       {
         // Want left and right of (f x) such  that
         // f : 'a -> 'b , x : 'a
+        int types_added = 0;
+        struct count_and_type resleft = deducetype_expr(expr->left);
+        struct count_and_type resright = deducetype_expr(expr->right);
+        types_added += resleft.types_added + resright.types_added;
 
-        break;
+        if (resleft.deduced_type) {
+            if (resleft.deduced_type->tag != TYPE_ARROW) {
+                if (deref_typexpr(resleft.deduced_type->name)->tag == TYPE_ARROW) {
+                    resleft.deduced_type =
+                        deref_typexpr(resleft.deduced_type->name);
+                } else {
+                    fprintf(stderr, "typecheck: error: left side of apply "
+                            "expression must be a function\n");
+                    fprintf(stderr, "  expected: ");
+                    print_typexpr(stderr, resright.deduced_type);
+                    fprintf(stderr, " -> 'b\n  actual: ");
+                    print_typexpr(stderr, resleft.deduced_type);
+                    fputs("\n", stderr);
+                    exit(EXIT_FAILURE);
+                }
+            }
+            if (resright.deduced_type) {
+                if (!typexpr_equals(
+                            resleft.deduced_type->left, resright.deduced_type)) {
+                    fprintf(stderr, "typecheck: error: right side of apply "
+                            "expression\n");
+                    print_type_error(
+                            resleft.deduced_type->left, resright.deduced_type);
+                    exit(EXIT_FAILURE);
+                }
+            } else {
+                // impose left on right
+                expr->right->type = resleft.deduced_type->left;
+            }
+        } else if (resright.deduced_type) {
+            // impose right on left?
+            if (debug_type_checker) {
+                printf("typecheck: need parent to work out type of function ");
+                print_typexpr(stdout,resright.deduced_type);
+                printf(" -> 'b\n");
+            }
+        } else {
+            if (debug_type_checker) {
+                printf("typecheck: no idea how to work out type of apply "
+                        "expression\n");
+            }
+        }
+
+        if (expr->type) {
+            if (resleft.deduced_type) {
+                if (!typexpr_equals(resleft.deduced_type->right, expr->type)) {
+                    fprintf(stderr, "typecheck: error: type of apply "
+                            "expression does not match "
+                            "result type of function on left\n");
+                    print_type_error(resleft.deduced_type->right, expr->type);
+                    exit(EXIT_FAILURE);
+                }
+            }
+            if (expr->right->type) {
+                // we can work out the type of the function
+                TypeExpr* inferred_type = typearrow(expr->right->type, expr->type);
+                if (expr->left->type) {
+                    if (!typexpr_equals(expr->left->type, inferred_type)) {
+                        fprintf(stderr, "typecheck: error: type of (RHS -> "
+                                "apply expr) does not match the function type\n");
+                        print_type_error(expr->left->type, inferred_type);
+                        free((void*)inferred_type);
+                        exit(EXIT_FAILURE);
+                    }
+                    free((void*)inferred_type);
+                } else {
+                    expr->left->type = inferred_type;
+                    types_added++;
+                }
+            }
+            return (struct count_and_type) { types_added, expr->type };
+        } else {
+            if (resleft.deduced_type) {
+                expr->type = resleft.deduced_type->right;
+                types_added++;
+            }
+        }
+
+        return (struct count_and_type) { types_added, expr->type };
       }
       case VAR:
       {
@@ -350,28 +432,233 @@ struct count_and_type {
       }
       case INTVAL:
       {
-        // don't bother attaching types or checking
-        return (struct count_and_type) { 0, int_type };
+        // don't bother checking for annotations
+        if (!expr->type) {
+            expr->type = int_type;
+            return (struct count_and_type) { 1, expr->type };
+        }
+        assert(typexpr_equals(int_type, expr->type));
+        return (struct count_and_type) { 0, expr->type };
       }
       case FUNC_EXPR:
       {
-        if (debug_type_checker) {
-            printf("typecheck: func expression not imlemented yet\n");
+        int types_added = 0;
+        /*
+         * Basic idea: push params onto var stack, type func body
+         * restore stack, add the definition and type of the func
+         * type the subexpr where the func is now defined
+         */
+        struct Var* pre_param_stack_ptr = var_stack_ptr;
+
+        for (const ParamList* c = expr->func.params; c; c = c->next) {
+            if (!c->param->type && c->param->name == symbol("()")) {
+                c->param->type = lookup_typexpr(symbol("unit"));
+            }
+            push_var(c->param->name, c->param->type);
         }
-        return (struct count_and_type) { 0, NULL };
+        struct Var* post_param_stack_ptr = var_stack_ptr;
+
+        /*
+         * type the body of the function that is being defined
+         */
+        struct count_and_type resbody = deducetype_expr(expr->func.body);
+        types_added += resbody.types_added;
+        TypeExpr* bodytype = resbody.deduced_type;
+
+        /*
+         * When restore the stack pointer we should ideally be checking
+         * whether the parameters have since had their types deduced
+         * and checking against the params we pushed
+         */
+
+        for (const ParamList* c = expr->func.params; c; c = c->next) {
+            Param* param = c->param;
+            struct Var* it = pre_param_stack_ptr;
+            // param list has to be non-empty (otherwise we are not in this loop
+            do { // so do! allowed
+                if (param->name == it->name) {
+                    if (it->type) {
+                        if (param->type) {
+                            // compare
+                            if (!typexpr_equals(it->type, param->type)) {
+                                fprintf(stderr,"typecheck: error: param %s "
+                                        "of function %s\n", it->name,
+                                        expr->func.name);
+                                print_type_error(it->type, param->type);
+                            }
+                        } else {
+                            if (debug_type_checker) {
+                                printf("typecheck: type of param %s deduced as ",
+                                        it->name);
+                                print_typexpr(stdout, it->type);
+                                fputs("\n", stdout);
+                            }
+                            param->type = it->type;
+                            ++types_added;
+                        }
+                    }
+                    break;
+                }
+            } while (++it != post_param_stack_ptr);
+        }
+
+        var_stack_ptr = pre_param_stack_ptr;
+        // typeof(func) = typeof(params) -> typeof(func.body)
+        _Bool have_type_of_params = 1;
+        int num_params = 0;
+        for (const ParamList* c = expr->func.params; c; c = c->next) {
+            if (!c->param->type)
+                have_type_of_params = 0;
+            num_params++;
+        }
+
+        if (debug_type_checker) {
+            printf("typecheck: %s all types of params for function %s\n",
+                    have_type_of_params ? "have" : "don't have", expr->func.name);
+            if (bodytype)
+                printf("typecheck: have body type too!\n");
+        }
+
+        TypeExpr* func_type = NULL;
+
+        if (have_type_of_params && bodytype) {
+            Param* paramstack[num_params];
+            int pos = 0;
+            for (const ParamList* c = expr->func.params; c; c = c->next) {
+                paramstack[pos++] = c->param;
+            }
+            func_type = bodytype;
+            while (--pos >= 0) {
+                func_type = typearrow(paramstack[pos]->type, func_type);
+            }
+            if (debug_type_checker) {
+                printf("typecheck: worked out func %s has type: ", expr->func.name);
+                print_typexpr(stdout, func_type);
+                fputs("\n", stdout);
+            }
+        }
+
+        push_var(expr->func.name, func_type);
+
+        /*
+         * type the subexpr of the func expr
+         */
+        struct count_and_type ressubexpr = deducetype_expr(expr->func.subexpr);
+        types_added += ressubexpr.types_added;
+        TypeExpr* subexprtype = ressubexpr.deduced_type;
+
+        if (expr->type) {
+            if (subexprtype) {
+                if (!typexpr_equals(subexprtype, expr->type)) {
+                    fprintf(stderr, "typecheck: error: recorded type of "
+                            "expression following %s definition",
+                            expr->func.name);
+                    print_type_error(subexprtype, expr->type);
+                    exit(EXIT_FAILURE);
+                }
+            } else {
+                expr->func.subexpr->type = expr->type;
+                types_added++;
+            }
+        } else {
+            if (subexprtype) {
+                expr->type = subexprtype;
+                types_added++;
+            }
+        }
+
+        /*
+         * It would be good at this point to find out if the type of the
+         * function was inferred from the subexpr
+         */
+        // TODO: do something useful with this
+        if (debug_type_checker) {
+            if (!func_type && pre_param_stack_ptr->type) {
+                printf("typecheck: funcvar %s now has type: ",
+                        pre_param_stack_ptr->name);
+                print_typexpr(stdout, pre_param_stack_ptr->type);
+                fputs("\n", stdout);
+            }
+        }
+
+        /*
+         * It's probably easier just to leak this memory rather than worry
+         * about who might now be holding references to it
+         * OR PERHAPS, perhaps it ouught to be pinned to our tree
+         */
+        //if (func_type) {
+        //    for (int i = 0; i < num_params; i++) {
+        //        TypeExpr* tmp = func_type;
+        //        func_type = func_type->right;
+        //        free((void*)tmp);
+        //    }
+        //}
+
+        var_stack_ptr = pre_param_stack_ptr;
+        return (struct count_and_type) { types_added, expr->type };
       }
       case BIND_EXPR:
       {
-        if (debug_type_checker) {
-            printf("typecheck: let expression not imlemented yet\n");
+        /*
+         * Main idea:
+         * Deduce init type, push down name, deduce subexpr type
+         */
+        struct count_and_type resinit = deducetype_expr(expr->binding.init);
+        int types_added = resinit.types_added;
+        TypeExpr* init_type = resinit.deduced_type;
+        if (init_type) {
+            if (debug_type_checker) {
+                printf("typecheck: deduced type for %s as ", expr->binding.name);
+                print_typexpr(stdout, init_type);
+                fputs("\n", stdout);
+            }
         }
-        return (struct count_and_type) { 0, NULL };
+
+        struct Var* saved_stack_ptr = var_stack_ptr;
+        push_var(expr->binding.name, init_type);
+
+        struct count_and_type ressubexpr = deducetype_expr(expr->binding.subexpr);
+        types_added += ressubexpr.types_added;
+        TypeExpr* subexprtype = ressubexpr.deduced_type;
+
+        if (expr->type) {
+            if (subexprtype) {
+                if (!typexpr_equals(subexprtype, expr->type)) {
+                    fprintf(stderr, "typecheck: error: conflicting types "
+                            "for expression following binding of %s ",
+                            expr->binding.name);
+                    print_type_error(subexprtype, expr->type);
+                    fputs("\n", stdout);
+                    exit(EXIT_FAILURE);
+                }
+            } else {
+                expr->binding.subexpr->type = expr->type;
+                types_added++;
+            }
+        } else {
+            if (subexprtype) {
+                expr->type = subexprtype;
+                types_added++;
+            }
+        }
+
+        if (!init_type && saved_stack_ptr->type) {
+            if (debug_type_checker) {
+                printf("typecheck: the type of %s was deduced by it's use "
+                        "in the subseqent subexpression: ", expr->binding.name);
+                print_typexpr(stdout, saved_stack_ptr->type);
+                fputs("\n", stdout);
+            }
+            expr->binding.init->type = saved_stack_ptr->type;
+        }
+
+        var_stack_ptr = saved_stack_ptr;
+        return (struct count_and_type) { types_added, expr->type };
       }
     }
 
     return (struct count_and_type) { 0 , NULL };
 }
-
 
 void type_check_tree(DeclarationList* root)
 {
@@ -389,7 +676,7 @@ void type_check_tree(DeclarationList* root)
     do {
         types_added = 0;
         type_name_count = saved_type_name_count;
-        void* saved_stack_ptr = var_stack_ptr;
+        struct Var* saved_stack_ptr = var_stack_ptr;
 
         for (DeclarationList* c = root; c; c = c->next) {
             Declaration* decl = c->declaration;
@@ -423,14 +710,7 @@ void type_check_tree(DeclarationList* root)
 
                 if (res.deduced_type) {
                     if (binding.type) {
-                        if (typexpr_equals(binding.type, res.deduced_type)) {
-                            // When can we free the deduced type?
-                            //free(res.deduced_type);
-                            if (debug_type_checker) {
-                                printf("typecheck: deduced type matched "
-                                        "declared type\n");
-                            }
-                        } else {
+                        if (!typexpr_equals(binding.type, res.deduced_type)) {
                             fprintf(stderr, "typecheck: error: type annotation "
                                     "does not matched deduced type for "
                                     "toplevel binding %s\n", binding.name);
@@ -449,12 +729,129 @@ void type_check_tree(DeclarationList* root)
               }
               case DECL_FUNC:
               {
+                /*
+                * Basic idea: push params onto var stack, type func body
+                * restore stack, add the definition and type of the func
+                */
+                struct Var* pre_param_stack_ptr = var_stack_ptr;
 
+                for (const ParamList* c = decl->func.params; c; c = c->next) {
+                    if (!c->param->type && c->param->name == symbol("()")) {
+                        c->param->type = lookup_typexpr(symbol("unit"));
+                    }
+                    push_var(c->param->name, c->param->type);
+                }
+                struct Var* post_param_stack_ptr = var_stack_ptr;
+
+                struct count_and_type resbody = deducetype_expr(decl->func.body);
+                types_added += resbody.types_added;
+                TypeExpr* bodytype = resbody.deduced_type;
+
+                struct Var* begin = pre_param_stack_ptr;
+                for (const ParamList* c = decl->func.params; c; c = c->next) {
+                    Param* param = c->param;
+                    struct Var* it = begin++;
+                    assert(param->name == it->name);
+                    if (it->type) {
+                        if (param->type) {
+                            if (!typexpr_equals(it->type, param->type)) {
+                                fprintf(stderr, "typecheck: error: param %s "
+                                        "of topleve function %s\n", it->name,
+                                        decl->func.name);
+                                print_type_error(it->type, param->type);
+                            }
+                        } else {
+                            if (debug_type_checker) {
+                                printf("typecheck: type of param %s deduced as",
+                                        it->name);
+                                print_typexpr(stdout, it->type);
+                                fputs("\n", stdout);
+                            }
+                            param->type = it->type;
+                            ++types_added;
+                        }
+                    }
+                }
+
+                _Bool have_type_of_params = 1;
+                for (struct Var* it = pre_param_stack_ptr;
+                        it != post_param_stack_ptr; ++it)
+                {
+                    have_type_of_params &= (it->type ? 1 : 0);
+                }
+
+                TypeExpr* func_type = NULL;
+                if (have_type_of_params && bodytype) {
+                    func_type = bodytype;
+                    for (struct Var* it = post_param_stack_ptr;
+                            --it >= pre_param_stack_ptr; )
+                    {
+                        func_type = typearrow(it->type, func_type);
+                    }
+                    if (debug_type_checker) {
+                        printf("typecheck: worked out toplevel function %s "
+                                "has type: ", decl->func.name);
+                        print_typexpr(stdout, func_type);
+                        fputs("\n", stdout);
+                    }
+                    if (decl->func.type) {
+                        if (!typexpr_equals(func_type, decl->func.type)) {
+                            fprintf(stderr, "typecheck: error: type of "
+                                    "toplevel function %s\n", decl->func.name);
+                            print_type_error(func_type, decl->func.type);
+                            exit(EXIT_FAILURE);
+                        }
+                    } else {
+                        decl->func.type = func_type;
+                    }
+                }
+
+                // restore stack and push func decl
+                var_stack_ptr = pre_param_stack_ptr;
                 push_var(decl->func.name, decl->func.type);
                 break;
               }
             }
         }
+
+        // Again, it would be sensible to check see if any of the
+        // types have been derived by their use
+        if (debug_type_checker) {
+            for (DeclarationList* c = root; c; c = c->next) {
+                for (struct Var* it = saved_stack_ptr; it != var_stack_ptr; ++it) {
+                    if (it->name == c->declaration->func.name) {
+                        printf("** %s\n", it->name);
+                        printf("  stacktype: ");
+                        if (it->type) print_typexpr(stdout, it->type);
+                        else fputs("(null)", stdout);
+                        printf("\n  tree type: ");
+                        switch (c->declaration->tag) {
+                            case DECL_FUNC:
+                            {
+                                if (c->declaration->func.type)
+                                    print_typexpr(stdout, c->declaration->func.type);
+                                else fputs("(null)", stdout);
+                                fputs("\n", stdout);
+                                break;
+                            }
+                            case DECL_BIND:
+                            {
+                                if (c->declaration->binding.type)
+                                    print_typexpr(stdout, c->declaration->binding.type);
+                                else fputs("(null)", stdout);
+                                fputs("\n", stdout);
+                                break;
+                            }
+                            case DECL_TYPE:
+                            {
+                                assert(0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if (debug_type_checker) {
             printf("typecheck: restoring stack pointer\n");
         }
