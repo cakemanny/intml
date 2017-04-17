@@ -209,6 +209,7 @@ Expr* local_func(Symbol name, ParamList* params, Expr* body, Expr* subexpr)
     func->params = params;
     func->body = body;
     func->subexpr = subexpr;
+    func->functype = NULL; /* deduced by type checker */
     return result;
 }
 

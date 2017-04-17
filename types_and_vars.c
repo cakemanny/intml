@@ -6,6 +6,9 @@
 #include <assert.h>
 #include <stdlib.h>
 
+#define EPFX    "typecheck: error: "
+#define PFX     "typecheck: "
+
 /* See header file */
 int debug_type_checker = 0;
 
@@ -100,11 +103,40 @@ static _Bool typexpr_equals(TypeExpr* left, TypeExpr* right)
     }
 }
 
+static TypeExpr* deref_if_needed(TypeExpr* t)
+{
+    if (t->tag == TYPE_NAME)
+        return deref_typexpr(t->name);
+    return t;
+}
+// TODO: finish me!
+_Bool typexpr_conforms_to(TypeExpr* left, TypeExpr* right)
+{
+    /*
+     * probably instead of NULL we should be using a special
+     * type tag... or assigning special names
+     */
+    if (left == NULL || right == NULL)
+        return 1;
+    if (typexpr_equals(left, right))
+        return 1;
+    // fully expand
+    TypeExpr* dleft = deref_if_needed(left);
+    TypeExpr* dright = deref_if_needed(right);
+    // if either were name then they don't match
+    if (dleft->tag == TYPE_NAME || dright->tag == TYPE_NAME) {
+        return 0;
+    }
+    return typexpr_conforms_to(left->left, right->left)
+        && typexpr_conforms_to(left->right, right->right);
+}
+
+
 static void add_type_name(Type* node)
 {
     if (type_name_count < TYPE_NAMES_MAX) {
         if (lookup_ornull_typexpr(node->name) != NULL) {
-            fprintf(stderr, "typecheck: error: type %s has already been defined\n",
+            fprintf(stderr, EPFX"type %s has already been defined\n",
                     node->name);
             exit(EXIT_FAILURE);
         }
@@ -113,8 +145,7 @@ static void add_type_name(Type* node)
         }
         type_names[type_name_count++] = node;
     } else {
-        fprintf(stderr, "typecheck: error: "
-                "More than %d typenames defined\n", TYPE_NAMES_MAX);
+        fprintf(stderr, EPFX"more than %d typenames defined\n", TYPE_NAMES_MAX);
         exit(EXIT_FAILURE);
     }
 }
@@ -131,8 +162,7 @@ static void add_builtin_type(const char* name_of_type)
 static void push_var(Symbol name, TypeExpr* type)
 {
     if (var_stack_ptr >= variable_stack + VAR_MAX) {
-        fprintf(stderr, "typecheck: error: "
-                "More than %d variable bindings in single scope\n", VAR_MAX);
+        fprintf(stderr, EPFX"more than %d variable bindings in single scope\n", VAR_MAX);
         exit(EXIT_FAILURE);
     }
     if (debug_type_checker) {
@@ -157,11 +187,11 @@ static struct Var* lookup_var(Symbol name)
             return end;
         }
     }
-    fprintf(stderr, "typecheck: error: value %s not in scope\n", name);
+    fprintf(stderr, EPFX"value %s not in scope\n", name);
     exit(EXIT_FAILURE);
 }
 
-void print_type_error(TypeExpr* expected, TypeExpr* actual)
+static void print_type_error(TypeExpr* expected, TypeExpr* actual)
 {
     fprintf(stderr, "  expected: ");
     print_typexpr(stderr, expected);
@@ -234,6 +264,19 @@ static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
     }
 }
 
+static const char * expr_name(enum ExprTag tag)
+{
+    assert(tag != 0);
+    assert(tag <= BIND_EXPR);
+    const char* expr_name[] = {
+        "", "plus", "minus", "multiply", "divide",
+        "equal",
+        "less than", "less than or equal",
+        "apply", "var", "int", "func", "let"
+    };
+    return expr_name[tag];
+}
+
 static
 struct count_and_type {
     int types_added;
@@ -243,15 +286,9 @@ struct count_and_type {
     TypeExpr* int_type = lookup_typexpr(symbol("int"));
     TypeExpr* unit_type = lookup_typexpr(symbol("unit"));
 
-    const char* expr_name[] = {
-        "", "plus", "minus", "multiply", "divide",
-        "equal",
-        "less than", "less than or equal",
-        "apply", "var", "int", "func", "let"
-    };
     if (debug_type_checker) {
         printf("typecheck: deduce type of %s expression\n",
-                expr_name[expr->tag]);
+                expr_name(expr->tag));
     }
 
     /*
@@ -279,8 +316,8 @@ struct count_and_type {
 
         if (resleft.deduced_type) {
             if (!typexpr_equals(int_type, resleft.deduced_type)) {
-                fprintf(stderr, "typecheck: error: left side of %s expression\n",
-                        expr_name[expr->tag]);
+                fprintf(stderr, EPFX"left side of %s expression\n",
+                        expr_name(expr->tag));
                 print_type_error(int_type, resleft.deduced_type);
                 exit(EXIT_FAILURE);
             }
@@ -290,8 +327,8 @@ struct count_and_type {
         }
         if (resright.deduced_type) {
             if (!typexpr_equals(int_type, resright.deduced_type)) {
-                fprintf(stderr, "typecheck: error: right side of %s expression\n",
-                        expr_name[expr->tag]);
+                fprintf(stderr, EPFX"right side of %s expression\n",
+                        expr_name(expr->tag));
                 print_type_error(int_type, resright.deduced_type);
                 exit(EXIT_FAILURE);
             }
@@ -302,8 +339,8 @@ struct count_and_type {
         // type should be int
         if (expr->type) {
             if (!typexpr_equals(int_type, expr->type)) {
-                fprintf(stderr, "typecheck: error: %s expression\n",
-                        expr_name[expr->tag]);
+                fprintf(stderr, EPFX"%s expression\n",
+                        expr_name(expr->tag));
                 print_type_error(int_type, expr->type);
             }
         } else {
@@ -322,8 +359,8 @@ struct count_and_type {
         if (resleft.deduced_type && resright.deduced_type) {
             // compare!
             if (!typexpr_equals(resleft.deduced_type, resright.deduced_type)) {
-                fprintf(stderr, "typecheck: error: right right of equals "
-                        "expression does not match left side\n");
+                fprintf(stderr, EPFX"right right of equals expression does "
+                        "not match left side\n");
                 print_type_error(resleft.deduced_type, resright.deduced_type);
             }
         } else if (resleft.deduced_type) {
@@ -343,7 +380,7 @@ struct count_and_type {
 
         if (expr->type) {
             if (!typexpr_equals(int_type, expr->type)) {
-                fprintf(stderr, "typecheck: error: equals expression\n");
+                fprintf(stderr, EPFX"equals expression\n");
                 print_type_error(int_type, expr->type);
                 exit(EXIT_FAILURE);
             }
@@ -370,7 +407,7 @@ struct count_and_type {
                     resleft.deduced_type =
                         deref_typexpr(resleft.deduced_type->name);
                 } else {
-                    fprintf(stderr, "typecheck: error: left side of apply "
+                    fprintf(stderr, EPFX"left side of apply "
                             "expression must be a function\n");
                     fprintf(stderr, "  expected: ");
                     print_typexpr(stderr, resright.deduced_type);
@@ -383,8 +420,7 @@ struct count_and_type {
             if (resright.deduced_type) {
                 if (!typexpr_equals(
                             resleft.deduced_type->left, resright.deduced_type)) {
-                    fprintf(stderr, "typecheck: error: right side of apply "
-                            "expression\n");
+                    fprintf(stderr, EPFX"right side of apply expression\n");
                     print_type_error(
                             resleft.deduced_type->left, resright.deduced_type);
                     exit(EXIT_FAILURE);
@@ -411,9 +447,8 @@ struct count_and_type {
         if (expr->type) {
             if (resleft.deduced_type) {
                 if (!typexpr_equals(resleft.deduced_type->right, expr->type)) {
-                    fprintf(stderr, "typecheck: error: type of apply "
-                            "expression does not match "
-                            "result type of function on left\n");
+                    fprintf(stderr, EPFX"type of apply expression does "
+                            "not match result type of function on left\n");
                     print_type_error(resleft.deduced_type->right, expr->type);
                     exit(EXIT_FAILURE);
                 }
@@ -423,8 +458,8 @@ struct count_and_type {
                 TypeExpr* inferred_type = typearrow(expr->right->type, expr->type);
                 if (expr->left->type) {
                     if (!typexpr_equals(expr->left->type, inferred_type)) {
-                        fprintf(stderr, "typecheck: error: type of (RHS -> "
-                                "apply expr) does not match the function type\n");
+                        fprintf(stderr, EPFX"type of (RHS -> apply expr) "
+                                "does not match the function type\n");
                         print_type_error(expr->left->type, inferred_type);
                         free((void*)inferred_type);
                         exit(EXIT_FAILURE);
@@ -451,7 +486,7 @@ struct count_and_type {
         if (expr->var == symbol("()")) {
             if (expr->type) {
                 if (!typexpr_equals(unit_type, expr->type)) {
-                    fprintf(stderr, "typecheck: error: unit value\n");
+                    fprintf(stderr, EPFX"unit value\n");
                     print_type_error(unit_type, expr->type);
                     exit(EXIT_FAILURE);
                 }
@@ -466,9 +501,9 @@ struct count_and_type {
             if (expr->type) {
                 if (found_type) {
                     if (!typexpr_equals(found_type, expr->type)) {
-                        fprintf(stderr, "typecheck: error: var expression "
-                                "type did not match previously known type "
-                                "for %s\n", expr->var);
+                        fprintf(stderr, EPFX"var expression type did not "
+                                "match previously known type for %s\n",
+                                expr->var);
                         print_type_error(found_type, expr->type);
                         exit(EXIT_FAILURE);
                     }
@@ -493,7 +528,7 @@ struct count_and_type {
                         printf("typecheck: type of %s not known yet\n",
                                 expr->var);
                     }
-                    return (struct count_and_type) { 0, NULL };
+                    return (struct count_and_type) { 0, expr->type };
                 }
             }
         }
@@ -551,9 +586,8 @@ struct count_and_type {
                         if (param->type) {
                             // compare
                             if (!typexpr_equals(it->type, param->type)) {
-                                fprintf(stderr,"typecheck: error: param %s "
-                                        "of function %s\n", it->name,
-                                        expr->func.name);
+                                fprintf(stderr,EPFX"param %s of function %s\n",
+                                        it->name, expr->func.name);
                                 print_type_error(it->type, param->type);
                             }
                         } else {
@@ -575,6 +609,10 @@ struct count_and_type {
         var_stack_ptr = pre_param_stack_ptr;
         // typeof(func) = typeof(params) -> typeof(func.body)
         _Bool have_type_of_params = 1;
+        for (struct Var* it = pre_param_stack_ptr;
+                it != post_param_stack_ptr; ++it) {
+            if (!it->type) have_type_of_params = 0;
+        }
         int num_params = 0;
         for (const ParamList* c = expr->func.params; c; c = c->next) {
             if (!c->param->type)
@@ -582,29 +620,31 @@ struct count_and_type {
             num_params++;
         }
 
-        if (debug_type_checker) {
-            printf("typecheck: %s all types of params for function %s\n",
-                    have_type_of_params ? "have" : "don't have", expr->func.name);
-            if (bodytype)
-                printf("typecheck: have body type too!\n");
-        }
-
         TypeExpr* func_type = NULL;
 
         if (have_type_of_params && bodytype) {
-            Param* paramstack[num_params];
-            int pos = 0;
-            for (const ParamList* c = expr->func.params; c; c = c->next) {
-                paramstack[pos++] = c->param;
-            }
             func_type = bodytype;
-            while (--pos >= 0) {
-                func_type = typearrow(paramstack[pos]->type, func_type);
+            for (struct Var* it = post_param_stack_ptr;
+                    --it >= pre_param_stack_ptr; )
+            {
+                func_type = typearrow(it->type, func_type);
             }
             if (debug_type_checker) {
                 printf("typecheck: worked out func %s has type: ", expr->func.name);
                 print_typexpr(stdout, func_type);
                 fputs("\n", stdout);
+            }
+
+            if (expr->func.functype) {
+                if (!typexpr_equals(func_type, expr->func.functype)) {
+                    fprintf(stderr, EPFX"type of function %s\n",
+                            expr->func.name);
+                    print_type_error(func_type, expr->func.functype);
+                    exit(EXIT_FAILURE);
+                }
+            } else {
+                expr->func.functype = func_type;
+                types_added++;
             }
         }
 
@@ -620,9 +660,8 @@ struct count_and_type {
         if (expr->type) {
             if (subexprtype) {
                 if (!typexpr_equals(subexprtype, expr->type)) {
-                    fprintf(stderr, "typecheck: error: recorded type of "
-                            "expression following %s definition",
-                            expr->func.name);
+                    fprintf(stderr, EPFX"recorded type of expression "
+                            "following %s definition", expr->func.name);
                     print_type_error(subexprtype, expr->type);
                     exit(EXIT_FAILURE);
                 }
@@ -694,9 +733,8 @@ struct count_and_type {
         if (expr->type) {
             if (subexprtype) {
                 if (!typexpr_equals(subexprtype, expr->type)) {
-                    fprintf(stderr, "typecheck: error: conflicting types "
-                            "for expression following binding of %s ",
-                            expr->binding.name);
+                    fprintf(stderr, EPFX"conflicting types for expression "
+                            "following binding of %s ", expr->binding.name);
                     print_type_error(subexprtype, expr->type);
                     fputs("\n", stdout);
                     exit(EXIT_FAILURE);
@@ -728,19 +766,37 @@ struct count_and_type {
       }
     }
 
-    return (struct count_and_type) { 0 , NULL };
 }
 
-void type_check_tree(DeclarationList* root)
+/*
+ * A helper function for accessing the name of any of the declration types
+ */
+static Symbol decl_name(Declaration* declaration)
 {
-    // 1. Add built-in types to the type table
-    // 2. find and add globally declared type names
+    switch (declaration->tag) {
+        case DECL_FUNC: return declaration->func.name;
+        case DECL_BIND: return declaration->binding.name;
+        case DECL_TYPE: return declaration->type.name;
+    }
+}
+/*
+ * A helper function for accessing the type of any declaration types
+ * Note, the type of a type declaration doesn't really fit the semantics of
+ * the other types of declarations
+ */
+static TypeExpr* decl_type(Declaration* declaration)
+{
+    switch (declaration->tag) {
+        case DECL_FUNC: return declaration->func.type;
+        case DECL_BIND: return declaration->binding.type;
+                        // chances are we don't want this case:
+        case DECL_TYPE: fprintf(stderr, PFX"warning: unexpected use of decl_type\n");
+                        return declaration->type.definition;
+    }
+}
 
-    // 3. Attempt to type the tree until we cannot add any more types
-    //    / report errors for inconsistencies
-
-    add_builtin_type("int");
-    add_builtin_type("unit");
+void type_and_check_exhaustively(DeclarationList* root)
+{
     int saved_type_name_count = type_name_count;
 
     int types_added;
@@ -782,7 +838,7 @@ void type_check_tree(DeclarationList* root)
                 if (res.deduced_type) {
                     if (binding.type) {
                         if (!typexpr_equals(binding.type, res.deduced_type)) {
-                            fprintf(stderr, "typecheck: error: type annotation "
+                            fprintf(stderr, EPFX"type annotation "
                                     "does not matched deduced type for "
                                     "toplevel binding %s\n", binding.name);
                             exit(EXIT_FAILURE);
@@ -800,10 +856,14 @@ void type_check_tree(DeclarationList* root)
               }
               case DECL_FUNC:
               {
+                /* !!! A lot of this is a direct copy of work above
+                 * TODO: refactor DECL_FUNC and FUNC_EXPR to share common
+                 * logic
+                 */
                 /*
-                * Basic idea: push params onto var stack, type func body
-                * restore stack, add the definition and type of the func
-                */
+                 * Basic idea: push params onto var stack, type func body
+                 * restore stack, add the definition and type of the func
+                 */
                 struct Var* pre_param_stack_ptr = var_stack_ptr;
 
                 for (const ParamList* c = decl->func.params; c; c = c->next) {
@@ -827,8 +887,8 @@ void type_check_tree(DeclarationList* root)
                     if (it->type) {
                         if (param->type) {
                             if (!typexpr_equals(it->type, param->type)) {
-                                fprintf(stderr, "typecheck: error: param %s "
-                                        "of topleve function %s\n", it->name,
+                                fprintf(stderr, EPFX"param %s of toplevel "
+                                        "function %s\n", it->name,
                                         decl->func.name);
                                 print_type_error(it->type, param->type);
                             }
@@ -849,7 +909,7 @@ void type_check_tree(DeclarationList* root)
                 for (struct Var* it = pre_param_stack_ptr;
                         it != post_param_stack_ptr; ++it)
                 {
-                    have_type_of_params &= (it->type ? 1 : 0);
+                    if (!it->type) have_type_of_params = 0;
                 }
 
                 TypeExpr* func_type = NULL;
@@ -868,8 +928,8 @@ void type_check_tree(DeclarationList* root)
                     }
                     if (decl->func.type) {
                         if (!typexpr_equals(func_type, decl->func.type)) {
-                            fprintf(stderr, "typecheck: error: type of "
-                                    "toplevel function %s\n", decl->func.name);
+                            fprintf(stderr, EPFX"type of toplevel "
+                                    "function %s\n", decl->func.name);
                             print_type_error(func_type, decl->func.type);
                             exit(EXIT_FAILURE);
                         }
@@ -892,34 +952,17 @@ void type_check_tree(DeclarationList* root)
         if (debug_type_checker) {
             for (DeclarationList* c = root; c; c = c->next) {
                 for (struct Var* it = saved_stack_ptr; it != var_stack_ptr; ++it) {
-                    if (it->name == c->declaration->func.name) {
+                    Declaration* decl = c->declaration;
+                    if (it->name == decl_name(decl)) {
                         printf("** %s\n", it->name);
                         printf("  stacktype: ");
                         if (it->type) print_typexpr(stdout, it->type);
                         else fputs("(null)", stdout);
                         printf("\n  tree type: ");
-                        switch (c->declaration->tag) {
-                            case DECL_FUNC:
-                            {
-                                if (c->declaration->func.type)
-                                    print_typexpr(stdout, c->declaration->func.type);
-                                else fputs("(null)", stdout);
-                                fputs("\n", stdout);
-                                break;
-                            }
-                            case DECL_BIND:
-                            {
-                                if (c->declaration->binding.type)
-                                    print_typexpr(stdout, c->declaration->binding.type);
-                                else fputs("(null)", stdout);
-                                fputs("\n", stdout);
-                                break;
-                            }
-                            case DECL_TYPE:
-                            {
-                                assert(0);
-                            }
-                        }
+                        if (decl_type(decl))
+                            print_typexpr(stdout, decl_type(decl));
+                        else fputs("(null)", stdout);
+                        fputs("\n", stdout);
                     }
                 }
             }
@@ -931,5 +974,181 @@ void type_check_tree(DeclarationList* root)
         var_stack_ptr = saved_stack_ptr;
     } while (types_added > 0);
 
+}
+
+void print_binding_hierachy(FILE* out, SymList* hierachy)
+{
+    for (SymList* c = hierachy; c; c = c->next) {
+        fprintf(out, "  in let binding %s\n", c->name);
+    }
+}
+
+_Bool check_if_fully_typed_params(ParamList* params, SymList* hierachy)
+{
+    _Bool result = 1;
+    for (ParamList* c = params; c; c = c->next) {
+        if (!c->param->type) {
+            fprintf(stderr, EPFX"unabled to determine type of parameter %s\n",
+                    c->param->name);
+            print_binding_hierachy(stderr, hierachy);
+            result = 0;
+        }
+    }
+    return result;
+}
+_Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
+{
+    _Bool result = 1;
+    switch (expr->tag) {
+      case PLUS:
+      case MINUS:
+      case MULTIPLY:
+      case DIVIDE:
+      case EQUAL:
+      case LESSTHAN:
+      case LESSEQUAL:
+      case APPLY:
+        if (!expr->type) {
+            fprintf(stderr, EPFX"%s expr with no type\n", expr_name(expr->tag));
+            print_binding_hierachy(stderr, hierachy);
+            result = 0;
+        }
+        result &= check_if_fully_typed_expr(expr->left, hierachy);
+        result &= check_if_fully_typed_expr(expr->right, hierachy);
+        break;
+      case VAR:
+        if (!expr->type) {
+            fprintf(stderr, EPFX"var %s with no type\n", expr->var);
+            print_binding_hierachy(stderr, hierachy);
+            result = 0;
+        }
+        break;
+      case INTVAL:
+        assert(expr->type != 0); // should damn well be typed
+        break;
+      case FUNC_EXPR:
+      {
+        if (!expr->func.functype) {
+            fprintf(stderr, EPFX"func %s with no type\n", expr->func.name);
+            print_binding_hierachy(stderr, hierachy);
+            result = 0;
+        }
+
+        SymList* subhierachy = symbol_list_add(hierachy, expr->func.name);
+        result &= check_if_fully_typed_params(expr->func.params, subhierachy);
+        result &= check_if_fully_typed_expr(expr->func.body, subhierachy);
+        result &= check_if_fully_typed_expr(expr->func.subexpr, subhierachy);
+        free(subhierachy);
+        if (!expr->type) {
+            assert(result == 0); // better be covered by subexpr
+        }
+        break;
+      }
+      case BIND_EXPR:
+      {
+        SymList* subhierachy = symbol_list_add(hierachy, expr->func.name);
+        result &= check_if_fully_typed_expr(expr->binding.init, subhierachy);
+        result &= check_if_fully_typed_expr(expr->binding.subexpr, subhierachy);
+        free(subhierachy);
+        if (!expr->type) {
+            assert(result == 0); // better be covered by subexpr
+        }
+        break;
+      }
+    }
+    return result;
+}
+_Bool check_if_fully_typed_root(DeclarationList* root)
+{
+    _Bool result = 1;
+    for (DeclarationList* c = root; c; c = c->next) {
+        Declaration* decl = c->declaration;
+        switch (decl->tag) {
+          case DECL_TYPE:
+            // Only incorrect if names were not found.
+            // This is enforced by the type checker
+            break;
+          case DECL_FUNC:
+          {
+            SymList* hierachy = symbol_list(decl->func.name);
+            if (!decl->func.type) {
+                fprintf(stderr, EPFX"unable to deduce type of function %s\n",
+                        decl->binding.name);
+                result = 0;
+            }
+            result &= check_if_fully_typed_params(decl->func.params, hierachy);
+            result &= check_if_fully_typed_expr(decl->func.body, hierachy);
+            free(hierachy);
+            break;
+          }
+          case DECL_BIND:
+          {
+            if (!decl->binding.type) {
+                fprintf(stderr, EPFX"unable to deduce type of let binding %s\n",
+                        decl->binding.name);
+                result = 0;
+            }
+            SymList* hierachy = symbol_list(decl->func.name);
+            result &= check_if_fully_typed_expr(decl->binding.init, hierachy);
+            free(hierachy);
+            break;
+          }
+        }
+    }
+    return result;
+}
+
+void type_check_tree(DeclarationList* root)
+{
+    /*
+     * 1. Add built-in types to the type table
+     * 2. find and add globally declared type names
+     * 3. Attempt to type the tree until we cannot add any more types
+     *    / report errors for inconsistencies
+     */
+
+    add_builtin_type("int");
+    add_builtin_type("unit");
+
+    type_and_check_exhaustively(root);
+
+    // Check where we were unable to deduce types
+    if (!check_if_fully_typed_root(root)) {
+        exit(EXIT_FAILURE);
+    }
+
+    // Wonder whether replacing functions with let bindings would
+    // simplifiy analysis and code generation at this point...
+}
+
+void check_runtime_properties(DeclarationList* root)
+{
+    /*
+     * Need a let main : unit -> int = ...
+     */
+    static TypeExpr* main_type;
+    if (!main_type) main_type =
+        typearrow(
+            typename(symbol("unit")),
+            typename(symbol("int")));
+
+    for (DeclarationList* c = root; c; c = c->next)
+    {
+        Declaration* decl = c->declaration;
+        if (decl_name(decl) == symbol("main")) {
+            if (typexpr_equals(decl_type(decl), main_type)) {
+                switch (decl->tag) {
+                  case DECL_FUNC: return;
+                  case DECL_BIND: return;
+                  case DECL_TYPE: break; // don't care about type
+                }
+            } else if (decl->tag != DECL_TYPE) {
+                fprintf(stderr, EPFX"main has incorrect type\n");
+                print_type_error(main_type, decl_type(decl));
+            }
+        }
+    }
+    fprintf(stderr, EPFX"no main function found\n  val main : unit -> int\n");
+    exit(EXIT_FAILURE);
 }
 

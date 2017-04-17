@@ -8,6 +8,8 @@
  */
 void type_check_tree(DeclarationList* root);
 
+void check_runtime_properties(DeclarationList* root);
+
 /*
  * A flag which can be set to allow the debug information to be printed
  * whilst the type

@@ -131,19 +131,40 @@ void yyerror(const char* msg)
 
 int main(int argc, char* argv[])
 {
+    int debug = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-v") == 0) {
-            debug_type_checker = 1;
+            debug = debug_type_checker = 1;
             break;
         }
     }
     yyparse();
     if (tree) {
-        print_tree(stdout, tree);
-        printf("\n");
-
+        if (debug) {
+            print_tree(stdout, tree);
+            printf("\n");
+        }
         // type check!
         type_check_tree(tree);
+        // Check we have a main function <- entry point
+        check_runtime_properties(tree);
+        if (debug) {
+            printf("found enough components of a runnable program (e.g. main)\n");
+        }
+
+        {
+            /* ideal target: */
+            // High level tree optimization
+            //optimize1(tree);
+            // Transform to 3AC (Three address code)
+            //ir_tree ir = transform();
+            //optimize2(ir);
+            // Generate code?
+        }
+        {
+            /* idea for now */
+            // Generate stack machine code
+        }
     }
 }
 

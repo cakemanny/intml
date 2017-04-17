@@ -25,7 +25,7 @@ Symbol symbol(const char* str)
         // reallocate
         Symbol* tmp = calloc(2 * table_capcity, sizeof *table);
         if (!tmp) {
-            fprintf(stderr, "symbols: out of memory\n");
+            perror("symbols: out of memory");
             abort();
         }
         memcpy(tmp, table, table_capcity * sizeof *table);
@@ -38,5 +38,35 @@ Symbol symbol(const char* str)
     }
     return table[table_len++] = strdup(str);
 }
+
+SymList* symbol_list(Symbol first)
+{
+    SymList* list = malloc(sizeof *list);
+    if (!list) {
+        perror("symbols: out of memory");
+        abort();
+    }
+    list->name = first;
+    list->next = NULL;
+    return list;
+}
+
+SymList* symbol_list_add(SymList* list, Symbol node)
+{
+    SymList* result = symbol_list(node);
+    result->next = list;
+    return result;
+}
+
+void symbol_list_free(SymList* list)
+{
+    SymList* head = list;
+    while (head) {
+        SymList* next = head->next;
+        free(head);
+        head = next;
+    }
+}
+
 
 

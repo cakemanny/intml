@@ -17,6 +17,9 @@ let app3 =
   let g = fx in
   1 + 2 + fx 2 2 * g 3 3
 
+let infer (x:int) = x         (* want this to now gain the type int -> int *)
+let deduce = infer 10
+
 let main () =
     f 2 + f 25
 

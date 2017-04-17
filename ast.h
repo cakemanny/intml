@@ -79,7 +79,7 @@ struct ParamList {
 
 struct Param {
     Symbol name;
-    /* we may want to be able to add type info here */
+    /* Maybe be either declared or deduced */
     TypeExpr* type;
 };
 
@@ -89,6 +89,12 @@ struct FuncExpr {
     ParamList* params;
     Expr* body;
     Expr* subexpr;
+
+    /* The deduced type of the function - which is not the same and the
+     * type of the expression itself or it's body
+     * i.e. typeof(param1) -> typeof(param2) -> ... -> typeof(body)
+     */
+    TypeExpr* functype;
 };
 
 struct BindExpr {
