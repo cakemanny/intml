@@ -171,6 +171,69 @@ void print_type_error(TypeExpr* expected, TypeExpr* actual)
     fputs("\n", stderr);
 }
 
+static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
+{
+    switch (expr->tag) {
+      case PLUS:
+      case MINUS:
+      case MULTIPLY:
+      case DIVIDE:
+      case LESSTHAN: // THESE should become bool in the future
+      case LESSEQUAL:
+      {
+        // Do not be bullied!
+        return 0;
+      }
+      case EQUAL:
+      {
+        return imposetypeon_expr(expr->left, newtype)
+            + imposetypeon_expr(expr->right, newtype);
+      }
+      case APPLY:
+      {
+        // Want left and right of (f x) such  that
+        // f : 'a -> 'b , x : 'a
+        if (expr->right->type) {
+            if (!expr->left->type) {
+                newtype = typearrow(newtype, expr->right->type);
+                if (debug_type_checker) {
+                    printf("typecheck: updating imposing type to ");
+                    print_typexpr(stdout, newtype);
+                    printf(" for left side of apply\n");
+                }
+                return imposetypeon_expr(expr->left, newtype);
+            }
+        }
+        return 0;
+      }
+      case VAR:
+      {
+        if (!expr->type) {
+            if (debug_type_checker) {
+                printf("typecheck: imposing type ");
+                print_typexpr(stdout, newtype);
+                printf(" on free variable %s\n", expr->var);
+            }
+            expr->type = newtype;
+            return 1;
+        }
+        return 0;
+      }
+      case INTVAL:
+      {
+          return 0;
+      }
+      case FUNC_EXPR:
+      {
+          return imposetypeon_expr(expr->func.subexpr, newtype);
+      }
+      case BIND_EXPR:
+      {
+          return imposetypeon_expr(expr->binding.subexpr, newtype);
+      }
+    }
+}
+
 static
 struct count_and_type {
     int types_added;
@@ -223,6 +286,7 @@ struct count_and_type {
             }
         } else {
             // Come back and impose types on free variables
+            types_added += imposetypeon_expr(expr->left, int_type);
         }
         if (resright.deduced_type) {
             if (!typexpr_equals(int_type, resright.deduced_type)) {
@@ -233,6 +297,7 @@ struct count_and_type {
             }
         } else {
             // Come back and impose types on free variables
+            types_added += imposetypeon_expr(expr->right, int_type);
         }
         // type should be int
         if (expr->type) {
@@ -263,10 +328,10 @@ struct count_and_type {
             }
         } else if (resleft.deduced_type) {
             expr->right->type = resleft.deduced_type;
-            // TODO: impose type on right
+            imposetypeon_expr(expr->right, resleft.deduced_type);
         } else if (resright.deduced_type) {
             expr->left->type = resleft.deduced_type;
-            // TODO: impose type on left
+            imposetypeon_expr(expr->left, resright.deduced_type);
         } else {
             if (debug_type_checker) {
                 printf("typecheck: unabled to work out type of either side "
@@ -275,13 +340,14 @@ struct count_and_type {
         }
 
         if (expr->type) {
-            if (!typexpr_equals(resleft.deduced_type, expr->type)) {
-                fprintf(stderr, "typecheck: error: plus expression\n");
+            if (!typexpr_equals(int_type, expr->type)) {
+                fprintf(stderr, "typecheck: error: equals expression\n");
                 print_type_error(int_type, expr->type);
+                exit(EXIT_FAILURE);
             }
         } else {
             if (resleft.deduced_type) {
-                expr->type = resleft.deduced_type;
+                expr->type = int_type;
                 types_added++;
             }
         }
