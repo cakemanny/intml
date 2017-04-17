@@ -328,10 +328,12 @@ struct count_and_type {
             }
         } else if (resleft.deduced_type) {
             expr->right->type = resleft.deduced_type;
-            imposetypeon_expr(expr->right, resleft.deduced_type);
+            types_added++;
+            types_added += imposetypeon_expr(expr->right, resleft.deduced_type);
         } else if (resright.deduced_type) {
             expr->left->type = resleft.deduced_type;
-            imposetypeon_expr(expr->left, resright.deduced_type);
+            types_added++;
+            types_added += imposetypeon_expr(expr->left, resright.deduced_type);
         } else {
             if (debug_type_checker) {
                 printf("typecheck: unabled to work out type of either side "
@@ -390,6 +392,7 @@ struct count_and_type {
             } else {
                 // impose left on right
                 expr->right->type = resleft.deduced_type->left;
+                types_added++;
             }
         } else if (resright.deduced_type) {
             // impose right on left?
@@ -519,6 +522,7 @@ struct count_and_type {
         for (const ParamList* c = expr->func.params; c; c = c->next) {
             if (!c->param->type && c->param->name == symbol("()")) {
                 c->param->type = lookup_typexpr(symbol("unit"));
+                types_added++;
             }
             push_var(c->param->name, c->param->type);
         }
@@ -716,6 +720,7 @@ struct count_and_type {
                 fputs("\n", stdout);
             }
             expr->binding.init->type = saved_stack_ptr->type;
+            types_added++;
         }
 
         var_stack_ptr = saved_stack_ptr;
@@ -804,6 +809,7 @@ void type_check_tree(DeclarationList* root)
                 for (const ParamList* c = decl->func.params; c; c = c->next) {
                     if (!c->param->type && c->param->name == symbol("()")) {
                         c->param->type = lookup_typexpr(symbol("unit"));
+                        types_added++;
                     }
                     push_var(c->param->name, c->param->type);
                 }
@@ -869,6 +875,7 @@ void type_check_tree(DeclarationList* root)
                         }
                     } else {
                         decl->func.type = func_type;
+                        types_added++;
                     }
                 }
 
