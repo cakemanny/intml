@@ -51,6 +51,11 @@ main__f:
  */
 int debug_codegen = 0;
 
+/*
+ * File to write assembly code to
+ */
+FILE* cgenout = NULL;
+
 typedef struct Function {
     Symbol name;
     TypeExpr* type; // Param Type = type->left, ReturnType = type->right
@@ -112,37 +117,37 @@ reg t1 = "%r11";
 reg sp = "%rsp";
 static void push(reg op0)
 {
-    printf("\tpushq\t%s\n", op0);
+    fprintf(cgenout,"\tpushq\t%s\n", op0);
 }
 static void add(reg dst, reg op1, reg op2)
 {
     if (dst == op1) {
-        printf("\taddq\t%s, %s\n", op2, dst);
+        fprintf(cgenout,"\taddq\t%s, %s\n", op2, dst);
     } else {
-        printf("\tmovq\t%s, %s\n", op1, dst);
-        printf("\taddq\t%s, %s\n", op2, dst);
+        fprintf(cgenout,"\tmovq\t%s, %s\n", op1, dst);
+        fprintf(cgenout,"\taddq\t%s, %s\n", op2, dst);
     }
 }
 static void mul(reg dst, reg op1, reg op2)
 {
     if (dst == op1) {
-        printf("\timulq\t%s, %s\n", op2, dst);
+        fprintf(cgenout,"\timulq\t%s, %s\n", op2, dst);
     } else {
-        printf("\tmovq\t%s, %s\n", op1, dst);
-        printf("\timulq\t%s, %s\n", op2, dst);
+        fprintf(cgenout,"\tmovq\t%s, %s\n", op1, dst);
+        fprintf(cgenout,"\timulq\t%s, %s\n", op2, dst);
     }
 }
-static void load(reg dst, reg src, int off)
+void load(reg dst, reg src, int off)
 {
-    printf("\tmovq\t%d(%s), %s\n", off, src, dst);
+    fprintf(cgenout,"\tmovq\t%d(%s), %s\n", off, src, dst);
 }
 static void mov(reg dst, long long intval)
 {
-    printf("\tmovq\t$%lld, %s\n", intval, dst);
+    fprintf(cgenout,"\tmovq\t$%lld, %s\n", intval, dst);
 }
 static void pop(reg dst)
 {
-    printf("\tpopq\t%s\n", dst);
+    fprintf(cgenout,"\tpopq\t%s\n", dst);
 }
 static void gen_stack_machine_code(Expr* expr);
 static void gen_sm_binop(Expr* expr)
@@ -179,6 +184,7 @@ static void gen_stack_machine_code(Expr* expr)
     }
 }
 
+// this will need a definition of local vars
 static void emit_fn_prologue()
 {
 
@@ -197,7 +203,7 @@ start:\n\
 	movq	%rax, %rdi\n\
 	movq	$0x2000001, %rax\n\
 	syscall\n\
-", stdout);
+", cgenout);
 #else
     // TODO: work out the linux / windows instruction
 # error "not yet defined"
@@ -212,21 +218,22 @@ void codegen(DeclarationList* root)
      * Decide how many variables each takes
      * Create a representation of an activation record for each function
      *
-     * Emit some boiler plate _start to call the main function
+     * Emit some boiler plate start to call the main function
      *
      */
 
     // start by not allowing any functions other than main
     // only compile expressions
+    assert(cgenout != NULL);
 
     for (DeclarationList* c = root; c; c = c->next) {
         Declaration* decl = c->declaration;
         if (decl->tag == DECL_FUNC && decl->func.name == symbol("main")) {
             emit_header();
             Symbol gname = global_name(decl->func.name, NULL);
-            printf("%s:\n", gname);
+            fprintf(cgenout, "%s:\n", gname);
             gen_stack_machine_code(decl->func.body);
-            printf("\tretq\n");
+            fprintf(cgenout, "\tretq\n");
 
             add_function(gname, decl->func.type);
         } else {
@@ -237,7 +244,8 @@ void codegen(DeclarationList* root)
     }
     if (debug_codegen) {
         for (int i = 0; i < fn_table_count; i++) {
-            printf("codegen: function %s has been declared\n", function_table[i].name);
+            fprintf(stderr, "codegen: function %s has been declared\n",
+                    function_table[i].name);
         }
     }
 }

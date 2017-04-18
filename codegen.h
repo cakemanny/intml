@@ -6,6 +6,8 @@
 
 void codegen(DeclarationList* root);
 
-extern int debug_codgen;
+extern int debug_codegen;
+
+extern FILE* cgenout;
 
 #endif /* __CODEGEN_H__ */

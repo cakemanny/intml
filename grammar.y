@@ -1,14 +1,19 @@
 %{
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include "ast.h"
 #include "symbols.h"
 #include "types_and_vars.h"
+#include "codegen.h"
 
 extern int yylex();
 static void yyerror(const char* msg);
 
+/* Line number from flex lexer */
 extern int yylineno;
+/* Input file used by flex lexer */
+extern FILE* yyin;
 
 DeclarationList* tree = NULL;
 
@@ -132,12 +137,55 @@ void yyerror(const char* msg)
 int main(int argc, char* argv[])
 {
     int debug = 0;
+    char* inarg = NULL;
+    char* outarg = NULL;
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-v") == 0) {
+        char* c = argv[i];
+        if (strcmp(c, "-v") == 0) {
             debug = debug_type_checker = 1;
             break;
+        } else if (i + 1 < argc && strcmp(c, "-o") == 0) {
+            if (outarg) {
+                fprintf(stderr, "intml: error: too many output files\n");
+                exit(EXIT_FAILURE);
+            }
+            outarg = argv[++i];
+        } else {
+            if (inarg) {
+                fprintf(stderr, "intml: error: too many input files\n");
+                exit(EXIT_FAILURE);
+            }
+            inarg = c;
         }
     }
+    // want to check we have input before potentially destroying an output file
+    // which was supposed to be input
+    if (inarg) {
+        if (strcmp(inarg, "-") == 0) {
+            yyin = stdin; // default anyway
+        } else {
+            if (!(yyin = fopen(inarg, "r"))) {
+                perror(inarg);
+                exit(EXIT_FAILURE);
+            }
+        }
+    } else {
+        fprintf(stderr, "intml: error: no input files\n");
+        exit(EXIT_FAILURE);
+    }
+    if (outarg) {
+        if (!(cgenout = fopen(outarg, "w"))) {
+            perror(outarg);
+            exit(EXIT_FAILURE);
+        }
+    } else {
+        cgenout = stdout;
+    }
+
+    debug_type_checker = debug;
+    debug_codegen = debug;
+
+
     yyparse();
     if (tree) {
         if (debug) {
@@ -149,7 +197,7 @@ int main(int argc, char* argv[])
         // Check we have a main function <- entry point
         check_runtime_properties(tree);
         if (debug) {
-            printf("found enough components of a runnable program (e.g. main)\n");
+            fprintf(stderr, "found enough components of a runnable program (e.g. main)\n");
         }
 
         {
