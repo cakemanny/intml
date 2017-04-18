@@ -164,6 +164,7 @@ int main(int argc, char* argv[])
         {
             /* idea for now */
             // Generate stack machine code
+            codegen(tree);
         }
     }
 }
