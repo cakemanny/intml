@@ -212,6 +212,10 @@ static void label(int label_number)
 {
     fprintf(cgenout, "L%d:\n", label_number);
 }
+static void beq(int label) // branch equal
+{
+    fprintf(cgenout, "\tje\tL%d\n", label);
+}
 static void bne(int label) // branch equal
 {
     fprintf(cgenout, "\tjne\tL%d\n", label);
@@ -331,11 +335,11 @@ static void gen_stack_machine_code(Expr* expr)
         case IF_EXPR:
         {
             gen_stack_machine_code(expr->condition);
-            mov_imm(t0, 1LL);
+            mov_imm(t0, 0LL);
             cmp(r0, t0);
             int end_of_true = request_label();
             int end_of_false = request_label();
-            bne(end_of_true);
+            beq(end_of_true);
             { // true
                 gen_stack_machine_code(expr->btrue);
             }
