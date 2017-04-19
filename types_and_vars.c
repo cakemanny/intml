@@ -261,6 +261,12 @@ static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
       {
           return imposetypeon_expr(expr->binding.subexpr, newtype);
       }
+      case IF_EXPR:
+      {
+          // Don't impose type on condition - which is bool/int
+          return imposetypeon_expr(expr->btrue, newtype)
+              + imposetypeon_expr(expr->bfalse, newtype);
+      }
     }
 }
 
@@ -277,11 +283,7 @@ static const char * expr_name(enum ExprTag tag)
     return expr_name[tag];
 }
 
-static
-struct count_and_type {
-    int types_added;
-    TypeExpr* deduced_type;
-} deducetype_expr(Expr* expr)
+static int deducetype_expr(Expr* expr)
 {
     TypeExpr* int_type = lookup_typexpr(symbol("int"));
     TypeExpr* unit_type = lookup_typexpr(symbol("unit"));
@@ -309,27 +311,27 @@ struct count_and_type {
       case LESSTHAN: // THESE should become bool in the future
       case LESSEQUAL:
       {
-        int types_added = 0;
-        struct count_and_type resleft = deducetype_expr(expr->left);
-        struct count_and_type resright = deducetype_expr(expr->right);
-        types_added += resleft.types_added + resright.types_added;
+        int types_added =
+            deducetype_expr(expr->left) + deducetype_expr(expr->right);
+        TypeExpr* left_type = expr->left->type;
+        TypeExpr* right_type = expr->right->type;
 
-        if (resleft.deduced_type) {
-            if (!typexpr_equals(int_type, resleft.deduced_type)) {
+        if (left_type) {
+            if (!typexpr_equals(int_type, left_type)) {
                 fprintf(stderr, EPFX"left side of %s expression\n",
                         expr_name(expr->tag));
-                print_type_error(int_type, resleft.deduced_type);
+                print_type_error(int_type, left_type);
                 exit(EXIT_FAILURE);
             }
         } else {
             // Come back and impose types on free variables
             types_added += imposetypeon_expr(expr->left, int_type);
         }
-        if (resright.deduced_type) {
-            if (!typexpr_equals(int_type, resright.deduced_type)) {
+        if (right_type) {
+            if (!typexpr_equals(int_type, right_type)) {
                 fprintf(stderr, EPFX"right side of %s expression\n",
                         expr_name(expr->tag));
-                print_type_error(int_type, resright.deduced_type);
+                print_type_error(int_type, right_type);
                 exit(EXIT_FAILURE);
             }
         } else {
@@ -347,30 +349,30 @@ struct count_and_type {
             expr->type = int_type;
             types_added++;
         }
-        return (struct count_and_type) { types_added, expr->type };
+        return types_added;
       }
       case EQUAL:
       {
-        int types_added = 0;
-        struct count_and_type resleft = deducetype_expr(expr->left);
-        struct count_and_type resright = deducetype_expr(expr->right);
-        types_added += resleft.types_added + resright.types_added;
+        int types_added =
+            deducetype_expr(expr->left) + deducetype_expr(expr->right);
+        TypeExpr* left_type = expr->left->type;
+        TypeExpr* right_type = expr->right->type;
 
-        if (resleft.deduced_type && resright.deduced_type) {
+        if (left_type && right_type) {
             // compare!
-            if (!typexpr_equals(resleft.deduced_type, resright.deduced_type)) {
+            if (!typexpr_equals(left_type, right_type)) {
                 fprintf(stderr, EPFX"right right of equals expression does "
                         "not match left side\n");
-                print_type_error(resleft.deduced_type, resright.deduced_type);
+                print_type_error(left_type, right_type);
             }
-        } else if (resleft.deduced_type) {
-            expr->right->type = resleft.deduced_type;
+        } else if (left_type) {
+            expr->right->type = left_type;
             types_added++;
-            types_added += imposetypeon_expr(expr->right, resleft.deduced_type);
-        } else if (resright.deduced_type) {
-            expr->left->type = resleft.deduced_type;
+            types_added += imposetypeon_expr(expr->right, left_type);
+        } else if (right_type) {
+            expr->left->type = left_type;
             types_added++;
-            types_added += imposetypeon_expr(expr->left, resright.deduced_type);
+            types_added += imposetypeon_expr(expr->left, right_type);
         } else {
             if (debug_type_checker) {
                 printf("typecheck: unabled to work out type of either side "
@@ -385,56 +387,56 @@ struct count_and_type {
                 exit(EXIT_FAILURE);
             }
         } else {
-            if (resleft.deduced_type) {
+            if (left_type) {
                 expr->type = int_type;
                 types_added++;
             }
         }
-        return (struct count_and_type) { types_added, expr->type };
+        return types_added;
       }
       case APPLY:
       {
         // Want left and right of (f x) such  that
         // f : 'a -> 'b , x : 'a
-        int types_added = 0;
-        struct count_and_type resleft = deducetype_expr(expr->left);
-        struct count_and_type resright = deducetype_expr(expr->right);
-        types_added += resleft.types_added + resright.types_added;
+        int types_added =
+            deducetype_expr(expr->left) + deducetype_expr(expr->right);
+        TypeExpr* left_type = expr->left->type;
+        TypeExpr* right_type = expr->right->type;
 
-        if (resleft.deduced_type) {
-            if (resleft.deduced_type->tag != TYPE_ARROW) {
-                if (deref_typexpr(resleft.deduced_type->name)->tag == TYPE_ARROW) {
-                    resleft.deduced_type =
-                        deref_typexpr(resleft.deduced_type->name);
+        if (left_type) {
+            if (left_type->tag != TYPE_ARROW) {
+                if (deref_typexpr(left_type->name)->tag == TYPE_ARROW) {
+                    left_type =
+                        deref_typexpr(left_type->name);
                 } else {
                     fprintf(stderr, EPFX"left side of apply "
                             "expression must be a function\n");
                     fprintf(stderr, "  expected: ");
-                    print_typexpr(stderr, resright.deduced_type);
+                    print_typexpr(stderr, right_type);
                     fprintf(stderr, " -> 'b\n  actual: ");
-                    print_typexpr(stderr, resleft.deduced_type);
+                    print_typexpr(stderr, left_type);
                     fputs("\n", stderr);
                     exit(EXIT_FAILURE);
                 }
             }
-            if (resright.deduced_type) {
+            if (right_type) {
                 if (!typexpr_equals(
-                            resleft.deduced_type->left, resright.deduced_type)) {
+                            left_type->left, right_type)) {
                     fprintf(stderr, EPFX"right side of apply expression\n");
                     print_type_error(
-                            resleft.deduced_type->left, resright.deduced_type);
+                            left_type->left, right_type);
                     exit(EXIT_FAILURE);
                 }
             } else {
                 // impose left on right
-                expr->right->type = resleft.deduced_type->left;
+                expr->right->type = left_type->left;
                 types_added++;
             }
-        } else if (resright.deduced_type) {
+        } else if (right_type) {
             // impose right on left?
             if (debug_type_checker) {
                 printf("typecheck: need parent to work out type of function ");
-                print_typexpr(stdout,resright.deduced_type);
+                print_typexpr(stdout, right_type);
                 printf(" -> 'b\n");
             }
         } else {
@@ -445,11 +447,11 @@ struct count_and_type {
         }
 
         if (expr->type) {
-            if (resleft.deduced_type) {
-                if (!typexpr_equals(resleft.deduced_type->right, expr->type)) {
+            if (left_type) {
+                if (!typexpr_equals(left_type->right, expr->type)) {
                     fprintf(stderr, EPFX"type of apply expression does "
                             "not match result type of function on left\n");
-                    print_type_error(resleft.deduced_type->right, expr->type);
+                    print_type_error(left_type->right, expr->type);
                     exit(EXIT_FAILURE);
                 }
             }
@@ -470,15 +472,15 @@ struct count_and_type {
                     types_added++;
                 }
             }
-            return (struct count_and_type) { types_added, expr->type };
+            return types_added;
         } else {
-            if (resleft.deduced_type) {
-                expr->type = resleft.deduced_type->right;
+            if (left_type) {
+                expr->type = left_type->right;
                 types_added++;
             }
         }
 
-        return (struct count_and_type) { types_added, expr->type };
+        return types_added;
       }
       case VAR:
       {
@@ -490,10 +492,10 @@ struct count_and_type {
                     print_type_error(unit_type, expr->type);
                     exit(EXIT_FAILURE);
                 }
-                return (struct count_and_type) { 0, expr->type };
+                return 0;
             } else {
                 expr->type = unit_type;
-                return (struct count_and_type) { 1, expr->type };
+                return 1;
             }
         } else {
             struct Var* found_var = lookup_var(expr->var);
@@ -514,7 +516,7 @@ struct count_and_type {
                     }
                     found_var->type = found_type = expr->type;
                 }
-                return (struct count_and_type) { 0, expr->type };
+                return 0;
             } else {
                 if (found_type) {
                     if (debug_type_checker) {
@@ -522,13 +524,13 @@ struct count_and_type {
                                 expr->var);
                     }
                     expr->type = found_type;
-                    return (struct count_and_type) { 1, expr->type };
+                    return 1;
                 } else {
                     if (debug_type_checker) {
                         printf("typecheck: type of %s not known yet\n",
                                 expr->var);
                     }
-                    return (struct count_and_type) { 0, expr->type };
+                    return 0;
                 }
             }
         }
@@ -539,10 +541,10 @@ struct count_and_type {
         // don't bother checking for annotations
         if (!expr->type) {
             expr->type = int_type;
-            return (struct count_and_type) { 1, expr->type };
+            return 1;
         }
         assert(typexpr_equals(int_type, expr->type));
-        return (struct count_and_type) { 0, expr->type };
+        return 0;
       }
       case FUNC_EXPR:
       {
@@ -566,9 +568,8 @@ struct count_and_type {
         /*
          * type the body of the function that is being defined
          */
-        struct count_and_type resbody = deducetype_expr(expr->func.body);
-        types_added += resbody.types_added;
-        TypeExpr* bodytype = resbody.deduced_type;
+        types_added += deducetype_expr(expr->func.body);
+        TypeExpr* bodytype = expr->func.body->type;
 
         /*
          * When restore the stack pointer we should ideally be checking
@@ -653,9 +654,8 @@ struct count_and_type {
         /*
          * type the subexpr of the func expr
          */
-        struct count_and_type ressubexpr = deducetype_expr(expr->func.subexpr);
-        types_added += ressubexpr.types_added;
-        TypeExpr* subexprtype = ressubexpr.deduced_type;
+        types_added += deducetype_expr(expr->func.subexpr);
+        TypeExpr* subexprtype = expr->func.subexpr->type;
 
         if (expr->type) {
             if (subexprtype) {
@@ -704,7 +704,7 @@ struct count_and_type {
         //}
 
         var_stack_ptr = pre_param_stack_ptr;
-        return (struct count_and_type) { types_added, expr->type };
+        return types_added;
       }
       case BIND_EXPR:
       {
@@ -712,9 +712,8 @@ struct count_and_type {
          * Main idea:
          * Deduce init type, push down name, deduce subexpr type
          */
-        struct count_and_type resinit = deducetype_expr(expr->binding.init);
-        int types_added = resinit.types_added;
-        TypeExpr* init_type = resinit.deduced_type;
+        int types_added = deducetype_expr(expr->binding.init);
+        TypeExpr* init_type = expr->binding.init->type;
         if (init_type) {
             if (debug_type_checker) {
                 printf("typecheck: deduced type for %s as ", expr->binding.name);
@@ -726,9 +725,8 @@ struct count_and_type {
         struct Var* saved_stack_ptr = var_stack_ptr;
         push_var(expr->binding.name, init_type);
 
-        struct count_and_type ressubexpr = deducetype_expr(expr->binding.subexpr);
-        types_added += ressubexpr.types_added;
-        TypeExpr* subexprtype = ressubexpr.deduced_type;
+        types_added += deducetype_expr(expr->binding.subexpr);
+        TypeExpr* subexprtype = expr->binding.subexpr->type;
 
         if (expr->type) {
             if (subexprtype) {
@@ -762,10 +760,66 @@ struct count_and_type {
         }
 
         var_stack_ptr = saved_stack_ptr;
-        return (struct count_and_type) { types_added, expr->type };
+        return types_added;
+      }
+      case IF_EXPR:
+      {
+        int types_added =
+            deducetype_expr(expr->condition)
+            + deducetype_expr(expr->btrue)
+            + deducetype_expr(expr->bfalse);
+
+        // start by enforce int_type on the condition
+        if (expr->condition->type) {
+            if (!typexpr_equals(int_type, expr->condition->type)) {
+                fprintf(stderr, EPFX"condition of if expression\n");
+                print_type_error(int_type, expr->condition->type);
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            types_added += imposetypeon_expr(expr->condition, int_type);
+        }
+
+        TypeExpr* true_type = expr->btrue->type;
+        TypeExpr* false_type = expr->bfalse->type;
+
+        if (true_type && false_type) {
+            // compare!
+            if (!typexpr_equals(true_type, false_type)) {
+                fprintf(stderr, EPFX"true and false branches of if "
+                        "expression with different types\n");
+                print_type_error(true_type, false_type);
+            }
+        } else if (true_type) {
+            expr->bfalse->type = true_type;
+            types_added++;
+            types_added += imposetypeon_expr(expr->bfalse, true_type);
+        } else if (false_type) {
+            expr->btrue->type = true_type;
+            types_added++;
+            types_added += imposetypeon_expr(expr->btrue, false_type);
+        } else {
+            if (debug_type_checker) {
+                printf("typecheck: unabled to work out type of either branch "
+                        "of if expression\n");
+            }
+        }
+
+        if (expr->type) {
+            if (!typexpr_equals(int_type, expr->type)) {
+                fprintf(stderr, EPFX"if expression\n");
+                print_type_error(int_type, expr->type);
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            if (true_type) {
+                expr->type = int_type;
+                types_added++;
+            }
+        }
+        return types_added;
       }
     }
-
 }
 
 /*
@@ -821,13 +875,13 @@ void type_and_check_exhaustively(DeclarationList* root)
                     fprintf(stdout, "typecheck: deducing type for toplevel "
                             "binding %s\n", binding.name);
                 }
-                struct count_and_type res = deducetype_expr(binding.init);
-                types_added += res.types_added;
+                types_added += deducetype_expr(binding.init);
+                TypeExpr* init_type = binding.init->type;
 
                 if (debug_type_checker) {
-                    if (res.deduced_type) {
+                    if (init_type) {
                         fprintf(stdout, "typecheck: deduced type ");
-                        print_typexpr(stdout, res.deduced_type);
+                        print_typexpr(stdout, init_type);
                         fputs("\n", stdout);
                     } else {
                         fprintf(stdout, "typecheck: unable to deduce type for "
@@ -835,16 +889,16 @@ void type_and_check_exhaustively(DeclarationList* root)
                     }
                 }
 
-                if (res.deduced_type) {
+                if (init_type) {
                     if (binding.type) {
-                        if (!typexpr_equals(binding.type, res.deduced_type)) {
+                        if (!typexpr_equals(binding.type, init_type)) {
                             fprintf(stderr, EPFX"type annotation "
                                     "does not matched deduced type for "
                                     "toplevel binding %s\n", binding.name);
                             exit(EXIT_FAILURE);
                         }
                     } else {
-                        decl->binding.type = binding.type = res.deduced_type;
+                        decl->binding.type = binding.type = init_type;
                         ++types_added;
                     }
                 } else {
@@ -875,9 +929,8 @@ void type_and_check_exhaustively(DeclarationList* root)
                 }
                 struct Var* post_param_stack_ptr = var_stack_ptr;
 
-                struct count_and_type resbody = deducetype_expr(decl->func.body);
-                types_added += resbody.types_added;
-                TypeExpr* bodytype = resbody.deduced_type;
+                types_added += deducetype_expr(decl->func.body);
+                TypeExpr* bodytype = decl->func.body->type;
 
                 struct Var* begin = pre_param_stack_ptr;
                 for (const ParamList* c = decl->func.params; c; c = c->next) {
@@ -1053,6 +1106,18 @@ _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
         if (!expr->type) {
             assert(result == 0); // better be covered by subexpr
         }
+        break;
+      }
+      case IF_EXPR:
+      {
+        if (!expr->type) {
+            fprintf(stderr, EPFX"if expression with no type\n");
+            print_binding_hierachy(stderr, hierachy);
+            result = 0;
+        }
+        result &= check_if_fully_typed_expr(expr->condition, hierachy);
+        result &= check_if_fully_typed_expr(expr->btrue, hierachy);
+        result &= check_if_fully_typed_expr(expr->bfalse, hierachy);
         break;
       }
     }

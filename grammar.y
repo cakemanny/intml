@@ -33,7 +33,7 @@ DeclarationList* tree = NULL;
     Symbol              identifier;
 }
 
-%token LET TYPE IN
+%token LET TYPE IN IF THEN ELSE
 %token UNIT
 %token <intVal> INT
 %token <identifier> ID
@@ -46,9 +46,9 @@ DeclarationList* tree = NULL;
 %type <expr> expr letexpr exprterm
 %type <typexpr> typexpr typeterm
 
-%right LET      /* These are to make let bindings stick to top level if poss */
-%right IN       /* should be precedence in bison v3 */
+%nonassoc LET IN   /* These are to make let bindings stick to top level if poss */
 %right ARROW    /* function typexprs */
+%nonassoc IF THEN ELSE
 %left '='       /* right in assignments but left in expressions */
 %nonassoc '<' LE
 %left '+' '-'
@@ -84,6 +84,7 @@ param:
   ;
 expr:
     letexpr             { $$ = $1; }
+  | IF expr THEN expr ELSE expr     { $$ = ifexpr($2,$4,$6); }
   | expr '+' expr       { $$ = plus($1, $3); }
   | expr '-' expr       { $$ = minus($1, $3); }
   | expr '*' expr       { $$ = multiply($1, $3); }
@@ -143,7 +144,6 @@ int main(int argc, char* argv[])
         char* c = argv[i];
         if (strcmp(c, "-v") == 0) {
             debug = debug_type_checker = 1;
-            break;
         } else if (i + 1 < argc && strcmp(c, "-o") == 0) {
             if (outarg) {
                 fprintf(stderr, "intml: error: too many output files\n");
@@ -187,33 +187,39 @@ int main(int argc, char* argv[])
 
 
     yyparse();
-    if (tree) {
-        if (debug) {
-            print_tree(stdout, tree);
-            printf("\n");
-        }
-        // type check!
-        type_check_tree(tree);
-        // Check we have a main function <- entry point
-        check_runtime_properties(tree);
-        if (debug) {
-            fprintf(stderr, "found enough components of a runnable program (e.g. main)\n");
-        }
-
-        {
-            /* ideal target: */
-            // High level tree optimization
-            //optimize1(tree);
-            // Transform to 3AC (Three address code)
-            //ir_tree ir = transform();
-            //optimize2(ir);
-            // Generate code?
-        }
-        {
-            /* idea for now */
-            // Generate stack machine code
-            codegen(tree);
-        }
+    if (!tree) {
+        exit(EXIT_FAILURE);
     }
+    if (debug) {
+        print_tree(stdout, tree);
+        printf("\n");
+    }
+    // type check!
+    type_check_tree(tree);
+    // Check we have a main function <- entry point
+    check_runtime_properties(tree);
+    if (debug) {
+        fprintf(stderr, "found enough components of a runnable program (e.g. main)\n");
+    }
+
+    {
+        /* ideal target: */
+        // High level tree optimization
+        //optimize1(tree);
+        // Transform to 3AC (Three address code)
+        //ir_tree ir = transform();
+        //optimize2(ir);
+        // Generate code?
+    }
+    {
+        /* idea for now */
+        // Generate stack machine code
+        codegen(tree);
+    }
+
+    if (cgenout != stdout)
+        fclose(cgenout);
+    if (yyin != stdin)
+        fclose(yyin);
 }
 

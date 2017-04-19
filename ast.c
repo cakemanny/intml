@@ -223,6 +223,15 @@ Expr* local_binding(Symbol name, Expr* init, Expr* subexpr)
     return result;
 }
 
+Expr* ifexpr(Expr* condition, Expr* btrue, Expr* bfalse)
+{
+    Expr* result = expr(IF_EXPR);
+    result->condition = condition;
+    result->btrue = btrue;
+    result->bfalse = bfalse;
+    return result;
+}
+
 static struct TypeExpr* typexpr(enum TypeExprTag tag)
 {
     struct TypeExpr* result = xmalloc(sizeof *result);
@@ -324,6 +333,13 @@ void print_expr(FILE* out, const Expr* expr)
         fputs(" 'in ", out);
         print_expr(out, expr->binding.subexpr);
         break;
+    case IF_EXPR:
+        fprintf(out, "if ");
+        print_expr(out, expr->condition);
+        fprintf(out, " then ");
+        print_expr(out, expr->btrue);
+        fprintf(out, " else ");
+        print_expr(out, expr->bfalse);
     }
     fputc(')', out);
 }

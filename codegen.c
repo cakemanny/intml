@@ -34,12 +34,17 @@ main__f:
   |-----------------|
   |  Result         | 0
   |-----------------|
-  |  &closure       | 1
+  |  &Closure       | 1
   |-----------------|
   |  Argument       | 2
   |-----------------|
   |  Return Address | 3
   |-----------------|
+  |  Local 1        | 4
+  |-----------------|
+  |  Local 2        | 5
+  |-----------------|
+  |  ...            |
 
   The closure for a function is just a struct containing the values
   the function references from above it
@@ -55,6 +60,8 @@ int debug_codegen = 0;
  * File to write assembly code to
  */
 FILE* cgenout = NULL;
+
+int next_label = 0;
 
 typedef struct Function {
     Symbol name;
@@ -115,46 +122,133 @@ reg r0 = "%rax";
 reg t0 = "%r10";
 reg t1 = "%r11";
 reg sp = "%rsp";
+static inline void ins2(const char* instr, const char* lop, const char* rop)
+{
+    fprintf(cgenout, "\t%s\t%s, %s\n", instr, lop, rop);
+}
+static inline void ins1(const char* instr, const char* op)
+{
+    fprintf(cgenout, "\t%s\t%s\n", instr, op);
+}
 static void push(reg op0)
 {
-    fprintf(cgenout,"\tpushq\t%s\n", op0);
+    ins1("pushq", op0);
 }
 static void add(reg dst, reg op1, reg op2)
 {
     if (dst == op1) {
-        fprintf(cgenout,"\taddq\t%s, %s\n", op2, dst);
-    } else {
-        fprintf(cgenout,"\tmovq\t%s, %s\n", op1, dst);
-        fprintf(cgenout,"\taddq\t%s, %s\n", op2, dst);
+        ins2("addq", op2, dst); // left to right because we are AT&T syntax
+    } else if (dst == op2) {
+        ins2("addq", op1, dst);
+    } else { // what if dst == op2?
+        ins2("movq", op1, dst);
+        ins2("addq", op2, dst);
     }
 }
 static void mul(reg dst, reg op1, reg op2)
 {
     if (dst == op1) {
-        fprintf(cgenout,"\timulq\t%s, %s\n", op2, dst);
+        ins2("imulq", op2, dst);
+    } else if (dst == op2) {
+        ins2("imulq", op1, dst);
+    } else { // what if dst == op2?
+        ins2("movq", op1, dst);
+        ins2("imulq", op2, dst);
+    }
+}
+static void sub(reg dst, reg minuend, reg amount)
+{
+    if (dst == minuend) {
+        ins2("subq", amount, dst);
+    } else if (dst == amount) {
+        ins2("subq", minuend, dst);
+        ins1("negq", dst);
     } else {
-        fprintf(cgenout,"\tmovq\t%s, %s\n", op1, dst);
-        fprintf(cgenout,"\timulq\t%s, %s\n", op2, dst);
+        ins2("movq", minuend, dst);
+        ins2("subq", amount, dst);
     }
 }
 void load(reg dst, reg src, int off)
 {
     fprintf(cgenout,"\tmovq\t%d(%s), %s\n", off, src, dst);
 }
-static void mov(reg dst, long long intval)
+static void mov_imm(reg dst, long long intval)
 {
     fprintf(cgenout,"\tmovq\t$%lld, %s\n", intval, dst);
 }
+static void mov(reg dst, reg src)
+{
+    ins2("movq", src, dst);
+}
+static void cmovl_imm(reg dst, long long intval)
+{
+    fprintf(cgenout,"\tcmovlq\t$%lld, %s\n", intval, dst);
+}
+static void cmovle_imm(reg dst, long long intval)
+{
+    fprintf(cgenout,"\tcmovleq\t$%lld, %s\n", intval, dst);
+}
+static void cmove_imm(reg dst, long long intval)
+{
+    fprintf(cgenout,"\tcmoveq\t$%lld, %s\n", intval, dst);
+}
 static void pop(reg dst)
 {
-    fprintf(cgenout,"\tpopq\t%s\n", dst);
+    ins1("popq", dst);
 }
+static void cmp(reg left, reg right)
+{
+    ins2("cmpq", right, left); // do these
+}
+
+/*
+ * Temporary labels look like L0, L1, L2
+ */
+static int request_label()
+{
+    return next_label++;
+}
+static void label(int label_number)
+{
+    fprintf(cgenout, "L%d:\n", label_number);
+}
+static void bne(int label) // branch equal
+{
+    fprintf(cgenout, "\tjne\tL%d\n", label);
+}
+static void bgt(int label) // branch equal
+{
+    fprintf(cgenout, "\tjg\tL%d\n", label);
+}
+static void bge(int label) // branch equal
+{
+    fprintf(cgenout, "\tjge\tL%d\n", label);
+}
+static void b(int label)
+{
+    fprintf(cgenout, "\tjmp\tL%d\n", label);
+}
+
+
+
+/*----------------------------------------`
+| Tree walk code gen                      |
+`----------------------------------------*/
+
 static void gen_stack_machine_code(Expr* expr);
 static void gen_sm_binop(Expr* expr)
 {
-    gen_stack_machine_code(expr->left);
-    push(r0);
-    gen_stack_machine_code(expr->right);
+    gen_stack_machine_code(expr->left);     // left expression into r0
+    push(r0);                               // save r0
+    gen_stack_machine_code(expr->right);    // right expression into r0
+    pop(t0);                                // left expr into t0
+}
+static void gen_sm_binop_r(Expr* expr)
+{
+    gen_stack_machine_code(expr->right);    // right expression into r0
+    push(r0);                               // save r0
+    gen_stack_machine_code(expr->left);     // left expression into r0
+    pop(t0);                                // right expr into t0
 }
 static void gen_stack_machine_code(Expr* expr)
 {
@@ -166,21 +260,93 @@ static void gen_stack_machine_code(Expr* expr)
     switch (expr->tag) {
         case PLUS:
             gen_sm_binop(expr);
-            pop(t0);
-            add(r0, r0, t0);
+            add(r0, r0, t0); // r0 = r0 + t0
             break;
         case MULTIPLY:
             gen_sm_binop(expr);
-            pop(t0);
-            mul(r0, r0, t0);
+            mul(r0, r0, t0); // r0 = r0 * t0
             break;
-        case INTVAL:
+        case MINUS:
+            gen_sm_binop_r(expr);
+            sub(r0, r0, t0); // r0 = r0 - t0
+            break;
+        case DIVIDE:
+            gen_sm_binop_r(expr);
+#ifdef __x86_64__
+            fprintf(cgenout, "\txorq\t%s, %s\n", "%rdx", "%rdx");
+            ins1("idiv", t0);
+#else
+#           error "not implemented division yet"
+#endif
+            break;
+        case LESSTHAN:
+        case LESSEQUAL:
+        case EQUAL:
         {
-            mov(r0, expr->intVal);
+            gen_sm_binop(expr);
+            mov(t1, r0);
+            mov_imm(r0, 0LL);
+            cmp(t0, t1);
+            int end = request_label();
+            if (expr->tag == LESSTHAN)          bge(end); // invert each cond
+            else if (expr->tag == LESSEQUAL)    bgt(end);
+            else if (expr->tag == EQUAL)        bne(end);
+            else assert(0);
+            mov_imm(r0, 1LL); // if so, skip this instruction
+            label(end);
             break;
         }
-        default:
-            assert(0 && "other cases need to be implemented");
+        case APPLY:
+            assert(0 && "apply not implemented yet");
+            break;
+        case VAR:
+            // 1. Need to know what function we are in
+            // 2. Need to know position the local lives in our activation
+            // record, or in our closure
+            assert(0 && "var not implemented yet");
+            break;
+        case INTVAL:
+            mov_imm(r0, expr->intVal);
+            break;
+        case FUNC_EXPR:
+        {
+            // Create a label to go after the function
+            // Jump to after function
+            // Emit function definition
+            // Emit expression where function is defined
+
+            int after_function = request_label();
+            b(after_function);
+            //enter_function(expr->func.name);
+            //exit_function();
+            label(after_function);
+            assert(0 && "functions not implemented yet");
+            break;
+        }
+        case BIND_EXPR:
+        {
+            assert(0 && "let expressions not implmented yet");
+            break;
+        }
+        case IF_EXPR:
+        {
+            gen_stack_machine_code(expr->condition);
+            mov_imm(t0, 1LL);
+            cmp(r0, t0);
+            int end_of_true = request_label();
+            int end_of_false = request_label();
+            bne(end_of_true);
+            { // true
+                gen_stack_machine_code(expr->btrue);
+            }
+            b(end_of_false);
+            label(end_of_true);
+            { // false
+                gen_stack_machine_code(expr->bfalse);
+            }
+            label(end_of_false);
+            break;
+        }
     }
 }
 
@@ -194,7 +360,7 @@ static void emit_fn_epilogue()
 }
 static void emit_header()
 {
-#if defined(__APPLE__)
+#if defined(__APPLE__) && defined(__x86_64__)
     fputs("\
 .text\n\
 .global start\n\
@@ -221,10 +387,10 @@ void codegen(DeclarationList* root)
      * Emit some boiler plate start to call the main function
      *
      */
+    assert(cgenout != NULL);
 
     // start by not allowing any functions other than main
     // only compile expressions
-    assert(cgenout != NULL);
 
     for (DeclarationList* c = root; c; c = c->next) {
         Declaration* decl = c->declaration;

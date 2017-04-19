@@ -7,7 +7,7 @@
 
 %}
 
-INT     [1-9][0-9]*
+INT     [1-9][0-9]*|0
 ID      [a-z][[:alnum:]]*
 TYPE    [A-Z][[:alnum:]]*
 WS      [ \t\f\v\r]
@@ -43,6 +43,9 @@ WS      [ \t\f\v\r]
 let             { return LET; }
 in              { return IN; }
 type            { return TYPE; }
+if              { return IF; }
+then            { return THEN; }
+else            { return ELSE; }
 
  /* built in types*/
 {INT}           { yylval.intVal = atoi(yytext); return INT; }

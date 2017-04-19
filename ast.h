@@ -116,7 +116,8 @@ struct Expr {
         VAR,
         INTVAL,
         FUNC_EXPR,
-        BIND_EXPR
+        BIND_EXPR,
+        IF_EXPR,
     }           tag;
     union {
         struct {
@@ -127,6 +128,11 @@ struct Expr {
         int         intVal;
         FuncExpr    func;
         BindExpr    binding;
+        struct {
+            Expr* condition;
+            Expr* btrue;    // true branch
+            Expr* bfalse;   // false branch
+        };
     };
     /* We will want to be able to type all our expressions */
     TypeExpr*   type;
@@ -258,6 +264,11 @@ Expr* local_func(Symbol name, ParamList* params, Expr* body, Expr* subexpr);
  * the binding
  */
 Expr* local_binding(Symbol name, Expr* init, Expr* subexpr);
+
+/*
+ * Creates a if-then-else expression node
+ */
+Expr* ifexpr(Expr* condition, Expr* btrue, Expr* bfalse);
 
 /*
  * Creates a function type expression
