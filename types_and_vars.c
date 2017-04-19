@@ -344,6 +344,7 @@ static int deducetype_expr(Expr* expr)
                 fprintf(stderr, EPFX"%s expression\n",
                         expr_name(expr->tag));
                 print_type_error(int_type, expr->type);
+                exit(EXIT_FAILURE);
             }
         } else {
             expr->type = int_type;
@@ -364,6 +365,7 @@ static int deducetype_expr(Expr* expr)
                 fprintf(stderr, EPFX"right right of equals expression does "
                         "not match left side\n");
                 print_type_error(left_type, right_type);
+                exit(EXIT_FAILURE);
             }
         } else if (left_type) {
             expr->right->type = left_type;
@@ -590,6 +592,7 @@ static int deducetype_expr(Expr* expr)
                                 fprintf(stderr,EPFX"param %s of function %s\n",
                                         it->name, expr->func.name);
                                 print_type_error(it->type, param->type);
+                                exit(EXIT_FAILURE);
                             }
                         } else {
                             if (debug_type_checker) {
@@ -789,6 +792,7 @@ static int deducetype_expr(Expr* expr)
                 fprintf(stderr, EPFX"true and false branches of if "
                         "expression with different types\n");
                 print_type_error(true_type, false_type);
+                exit(EXIT_FAILURE);
             }
         } else if (true_type) {
             expr->bfalse->type = true_type;
@@ -944,6 +948,7 @@ void type_and_check_exhaustively(DeclarationList* root)
                                         "function %s\n", it->name,
                                         decl->func.name);
                                 print_type_error(it->type, param->type);
+                                exit(EXIT_FAILURE);
                             }
                         } else {
                             if (debug_type_checker) {
