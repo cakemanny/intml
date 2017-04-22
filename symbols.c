@@ -7,11 +7,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-Symbol default_table[1024];
+static Symbol default_table[1024];
 
-Symbol* table = default_table;
-size_t table_capcity = 1024;
-size_t table_len = 0;
+static Symbol* table = default_table;
+static size_t table_capcity = 1024;
+static size_t table_len = 0;
 
 
 Symbol symbol(const char* str)

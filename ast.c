@@ -132,7 +132,7 @@ static Expr* binexpr(int tag, Expr* left, Expr* right)
     result->tag = tag;
     result->left = left;
     result->right = right;
-    result->type = NULL;
+    result->type = NULL;    /* worked out by type check */
     return result;
 }
 Expr* plus(Expr* left, Expr* right)
@@ -184,20 +184,19 @@ Expr* var(Symbol name)
 {
     Expr* result = expr(VAR);
     result->var = name;
+    result->var_id = -1;
     return result;
 }
 
 Expr* unit_expr()
 {
-    Expr* result = expr(VAR);
-    result->var = symbol("()");
-    return result;
+    return expr(UNITVAL);
 }
 
 Expr* intval(int value)
 {
     Expr* result = expr(INTVAL);
-    result->intVal = value;
+    result->intval = value;
     return result;
 }
 
@@ -209,7 +208,10 @@ Expr* local_func(Symbol name, ParamList* params, Expr* body, Expr* subexpr)
     func->params = params;
     func->body = body;
     func->subexpr = subexpr;
+
     func->functype = NULL; /* deduced by type checker */
+    func->function_id = -1; /* assigned by codegen */
+    func->var_id = -1;      /* assigned by codegen */
     return result;
 }
 
@@ -220,6 +222,8 @@ Expr* local_binding(Symbol name, Expr* init, Expr* subexpr)
     bind->name = name;
     bind->init = init;
     bind->subexpr = subexpr;
+
+    bind->var_id = -1;  /* assigned by codegen */
     return result;
 }
 
@@ -316,8 +320,11 @@ void print_expr(FILE* out, const Expr* expr)
     case VAR:
         fprintf(out, "var %s", expr->var);
         break;
+    case UNITVAL:
+        fprintf(out, "unit ()");
+        break;
     case INTVAL:
-        fprintf(out, "int %d", expr->intVal);
+        fprintf(out, "int %d", expr->intval);
         break;
     case FUNC_EXPR:
         fprintf(out, "func %s ", expr->func.name);

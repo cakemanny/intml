@@ -15,21 +15,21 @@ int debug_type_checker = 0;
 /*
  * Keep a table of global type names
  */
-const int TYPE_NAMES_MAX = 1024;
-Type* type_names[TYPE_NAMES_MAX];
-int type_name_count = 0;
+static const int TYPE_NAMES_MAX = 1024;
+static Type* type_names[TYPE_NAMES_MAX];
+static int type_name_count = 0;
 
 /*
  * A stack of variable names that may help us type expressions
  */
-const int VAR_MAX = 1024;
-struct Var {
+static const int VAR_MAX = 1024;
+static struct Var {
     Symbol name;
     TypeExpr* type;
 } variable_stack[VAR_MAX];
 
 /* ptr to the end of the stack */
-struct Var* var_stack_ptr = variable_stack;
+static struct Var* var_stack_ptr = variable_stack;
 
 
 static TypeExpr* lookup_ornull_typexpr(Symbol name)
@@ -249,6 +249,10 @@ static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
         }
         return 0;
       }
+      case UNITVAL:
+      {
+          return 0;
+      }
       case INTVAL:
       {
           return 0;
@@ -273,12 +277,12 @@ static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
 static const char * expr_name(enum ExprTag tag)
 {
     assert(tag != 0);
-    assert(tag <= BIND_EXPR);
+    assert(tag <= IF_EXPR);
     const char* expr_name[] = {
         "", "plus", "minus", "multiply", "divide",
         "equal",
         "less than", "less than or equal",
-        "apply", "var", "int", "func", "let"
+        "apply", "var", "unit", "int", "func", "let", "if"
     };
     return expr_name[tag];
 }
@@ -486,57 +490,50 @@ static int deducetype_expr(Expr* expr)
       }
       case VAR:
       {
-        // This is more proof that () should by it's own value type
-        if (expr->var == symbol("()")) {
-            if (expr->type) {
-                if (!typexpr_equals(unit_type, expr->type)) {
-                    fprintf(stderr, EPFX"unit value\n");
-                    print_type_error(unit_type, expr->type);
+        struct Var* found_var = lookup_var(expr->var);
+        TypeExpr* found_type = found_var->type;
+        if (expr->type) {
+            if (found_type) {
+                if (!typexpr_equals(found_type, expr->type)) {
+                    fprintf(stderr, EPFX"var expression type did not "
+                            "match previously known type for %s\n",
+                            expr->var);
+                    print_type_error(found_type, expr->type);
                     exit(EXIT_FAILURE);
                 }
-                return 0;
             } else {
-                expr->type = unit_type;
-                return 1;
+                if (debug_type_checker) {
+                    printf("typecheck: infering var %s type from "
+                            "expression\n", expr->var);
+                }
+                found_var->type = found_type = expr->type;
             }
+            return 0;
         } else {
-            struct Var* found_var = lookup_var(expr->var);
-            TypeExpr* found_type = found_var->type;
-            if (expr->type) {
-                if (found_type) {
-                    if (!typexpr_equals(found_type, expr->type)) {
-                        fprintf(stderr, EPFX"var expression type did not "
-                                "match previously known type for %s\n",
-                                expr->var);
-                        print_type_error(found_type, expr->type);
-                        exit(EXIT_FAILURE);
-                    }
-                } else {
-                    if (debug_type_checker) {
-                        printf("typecheck: infering var %s type from "
-                                "expression\n", expr->var);
-                    }
-                    found_var->type = found_type = expr->type;
+            if (found_type) {
+                if (debug_type_checker) {
+                    printf("typecheck: type of %s found in lookup\n",
+                            expr->var);
+                }
+                expr->type = found_type;
+                return 1;
+            } else {
+                if (debug_type_checker) {
+                    printf("typecheck: type of %s not known yet\n",
+                            expr->var);
                 }
                 return 0;
-            } else {
-                if (found_type) {
-                    if (debug_type_checker) {
-                        printf("typecheck: type of %s found in lookup\n",
-                                expr->var);
-                    }
-                    expr->type = found_type;
-                    return 1;
-                } else {
-                    if (debug_type_checker) {
-                        printf("typecheck: type of %s not known yet\n",
-                                expr->var);
-                    }
-                    return 0;
-                }
             }
         }
-        assert(0 && "shouldn't be possible to get here");
+      }
+      case UNITVAL:
+      {
+        if (!expr->type) {
+            expr->type = unit_type;
+            return 1;
+        }
+        assert(typexpr_equals(unit_type, expr->type));
+        return 0;
       }
       case INTVAL:
       {
@@ -853,7 +850,7 @@ static TypeExpr* decl_type(Declaration* declaration)
     }
 }
 
-void type_and_check_exhaustively(DeclarationList* root)
+static void type_and_check_exhaustively(DeclarationList* root)
 {
     int saved_type_name_count = type_name_count;
 
@@ -1034,14 +1031,14 @@ void type_and_check_exhaustively(DeclarationList* root)
 
 }
 
-void print_binding_hierachy(FILE* out, SymList* hierachy)
+static void print_binding_hierachy(FILE* out, SymList* hierachy)
 {
     for (SymList* c = hierachy; c; c = c->next) {
         fprintf(out, "  in let binding %s\n", c->name);
     }
 }
 
-_Bool check_if_fully_typed_params(ParamList* params, SymList* hierachy)
+static _Bool check_if_fully_typed_params(ParamList* params, SymList* hierachy)
 {
     _Bool result = 1;
     for (ParamList* c = params; c; c = c->next) {
@@ -1054,7 +1051,7 @@ _Bool check_if_fully_typed_params(ParamList* params, SymList* hierachy)
     }
     return result;
 }
-_Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
+static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
 {
     _Bool result = 1;
     switch (expr->tag) {
@@ -1081,8 +1078,9 @@ _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
             result = 0;
         }
         break;
+      case UNITVAL:
       case INTVAL:
-        assert(expr->type != 0); // should damn well be typed
+        assert(expr->type != NULL); // should damn well be typed
         break;
       case FUNC_EXPR:
       {
@@ -1128,7 +1126,8 @@ _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
     }
     return result;
 }
-_Bool check_if_fully_typed_root(DeclarationList* root)
+
+static _Bool check_if_fully_typed_root(DeclarationList* root)
 {
     _Bool result = 1;
     for (DeclarationList* c = root; c; c = c->next) {

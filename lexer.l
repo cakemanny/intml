@@ -48,7 +48,7 @@ then            { return THEN; }
 else            { return ELSE; }
 
  /* built in types*/
-{INT}           { yylval.intVal = atoi(yytext); return INT; }
+{INT}           { yylval.intval = atoi(yytext); return INT; }
 "()"            { return UNIT; }
 
 {ID}            { yylval.identifier = symbol(yytext); return ID; }

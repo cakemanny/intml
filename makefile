@@ -1,8 +1,8 @@
 
 CC=gcc
-CFLAGS=-std=gnu11 -g -Wall
+CFLAGS=-std=gnu11 -g -Wall -fsanitize=address -fno-omit-frame-pointer
 LDLIBS=
-LDFLAGS=
+LDFLAGS= -fsanitize=address
 
 YACC=bison
 YFLAGS=-d -v

@@ -62,7 +62,7 @@ struct Declaration {
         DECL_FUNC = 1,
         DECL_BIND,
         DECL_TYPE
-    }           tag;
+    }               tag;
     union {
         Func        func;
         Binding     binding;
@@ -95,12 +95,16 @@ struct FuncExpr {
      * i.e. typeof(param1) -> typeof(param2) -> ... -> typeof(body)
      */
     TypeExpr* functype;
+    int var_id;         // We add ID's to the named declarations
+    int function_id;
 };
 
 struct BindExpr {
     Symbol name;
     Expr* init;
     Expr* subexpr;
+
+    int var_id;
 };
 
 struct Expr {
@@ -114,28 +118,32 @@ struct Expr {
         LESSEQUAL,
         APPLY,
         VAR,
+        UNITVAL,
         INTVAL,
         FUNC_EXPR,
         BIND_EXPR,
         IF_EXPR,
-    }           tag;
+    }               tag;
     union {
-        struct {
+        struct { /* PLUS - APPLY */
             Expr*   left;
             Expr*   right;
         };
-        Symbol      var;
-        int         intVal;
-        FuncExpr    func;
-        BindExpr    binding;
         struct {
-            Expr* condition;
-            Expr* btrue;    // true branch
-            Expr* bfalse;   // false branch
+            Symbol  var;        /* VAR */
+            int     var_id;
+        };
+        int         intval;     /* INTVAL */
+        FuncExpr    func;       /* FUNC_EXPR */
+        BindExpr    binding;    /* BIND_EXPR */
+        struct { /* IF_EXPR */
+            Expr*   condition;
+            Expr*   btrue;      // true branch
+            Expr*   bfalse;     // false branch
         };
     };
     /* We will want to be able to type all our expressions */
-    TypeExpr*   type;
+    TypeExpr*       type;
 };
 
 struct TypeExpr {
@@ -144,11 +152,11 @@ struct TypeExpr {
         TYPE_ARROW
     } tag;
     union {
+        Symbol name;
         struct {
             TypeExpr* left;
             TypeExpr* right;
         };
-        Symbol name;
     };
 };
 
@@ -156,6 +164,14 @@ struct TypeExpr {
  * Print the AST
  */
 void print_tree(FILE* out, const DeclarationList* root);
+/*
+ * Print an expression
+ */
+void print_expr(FILE* out, const Expr* expr);
+/*
+ * Print out a declration
+ */
+void print_declaration(FILE* out, const Declaration* decl);
 /*
  * Print a type expression tree
  */

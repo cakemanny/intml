@@ -15,7 +15,7 @@ extern int yylineno;
 /* Input file used by flex lexer */
 extern FILE* yyin;
 
-DeclarationList* tree = NULL;
+static DeclarationList* tree = NULL;
 
 %}
 
@@ -29,13 +29,14 @@ DeclarationList* tree = NULL;
     TypeExpr*           typexpr;
 
 /* terminals */
-    int                 intVal;
+    int                 intval;     // we should probably store these
+                                    // as strings/symbols as well...
     Symbol              identifier;
 }
 
 %token LET TYPE IN IF THEN ELSE
 %token UNIT
-%token <intVal> INT
+%token <intval> INT
 %token <identifier> ID
 %token <error> ERROR
 
