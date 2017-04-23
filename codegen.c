@@ -93,11 +93,11 @@ typedef struct Function {
                             // it's parent
 } Function;
 
-static const int MAX_FNS = 1024;
+#define MAX_FNS 1024
 static Function function_table[MAX_FNS];
 static int fn_table_count = 0;
 
-static const int VAR_MAX = 1024;
+#define VAR_MAX 1024
 static struct Var {
     Symbol name;
     TypeExpr* type;
@@ -309,15 +309,12 @@ static void sub(reg dst, reg minuend, reg amount)
         ins2("subq", amount, dst);
     }
 }
+// load but with a comment to help debugging
 static void loadc(reg dst, reg src, int off, const char* comment)
 {
     fprintf(cgenout,"\tmovq\t%d(%s), %s", off, src, dst);
     if (comment) fprintf(cgenout,"\t\t# %s\n", comment);
     else fputs("\n", cgenout);
-}
-static void load(reg dst, reg src, int off)
-{
-    loadc(dst, src, off, NULL);
 }
 static void store(int off, reg dst, reg src)
 {
@@ -771,6 +768,7 @@ static size_t stack_size_of_type(TypeExpr* type)
         return 2 * WORD_SIZE; // Or I suppose we should add some #defines
       }
     }
+    abort();
 }
 
 // Create name for infered anon functions created by multiple param function
@@ -1020,6 +1018,7 @@ Expr* restructure_tree(DeclarationList* root)
           }
         }
     }
+    abort();
 }
 
 void codegen(DeclarationList* root)

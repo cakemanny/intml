@@ -15,14 +15,14 @@ int debug_type_checker = 0;
 /*
  * Keep a table of global type names
  */
-static const int TYPE_NAMES_MAX = 1024;
+#define TYPE_NAMES_MAX 1024
 static Type* type_names[TYPE_NAMES_MAX];
 static int type_name_count = 0;
 
 /*
  * A stack of variable names that may help us type expressions
  */
-static const int VAR_MAX = 1024;
+#define VAR_MAX 1024
 static struct Var {
     Symbol name;
     TypeExpr* type;
@@ -101,6 +101,7 @@ static _Bool typexpr_equals(TypeExpr* left, TypeExpr* right)
             && typexpr_equals(left->right, right->right);
       }
     }
+    abort(); // Shouldnt be possible
 }
 
 static TypeExpr* deref_if_needed(TypeExpr* t)
@@ -272,6 +273,9 @@ static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
               + imposetypeon_expr(expr->bfalse, newtype);
       }
     }
+    // Shouldn't be possible to get here, use abort instead of assert to keep
+    // the real gcc happy even in with NDEBUG
+    abort();
 }
 
 static const char * expr_name(enum ExprTag tag)
@@ -821,6 +825,7 @@ static int deducetype_expr(Expr* expr)
         return types_added;
       }
     }
+    abort(); // Shouldn't be possible to get here
 }
 
 /*
@@ -833,6 +838,7 @@ static Symbol decl_name(Declaration* declaration)
         case DECL_BIND: return declaration->binding.name;
         case DECL_TYPE: return declaration->type.name;
     }
+    abort();
 }
 /*
  * A helper function for accessing the type of any declaration types
@@ -848,6 +854,7 @@ static TypeExpr* decl_type(Declaration* declaration)
         case DECL_TYPE: fprintf(stderr, PFX"warning: unexpected use of decl_type\n");
                         return declaration->type.definition;
     }
+    abort();
 }
 
 static void type_and_check_exhaustively(DeclarationList* root)

@@ -1,8 +1,13 @@
 
-CC=gcc
-CFLAGS=-std=gnu11 -g -Wall -fsanitize=address -fno-omit-frame-pointer
+CC=gcc-6
+CFLAGS=-std=gnu11 -g -Wall -fno-omit-frame-pointer
 LDLIBS=
-LDFLAGS= -fsanitize=address
+LDFLAGS=
+
+ifndef NDEBUG
+  CFLAGS += -fsanitize=address
+  LDFLAGS += -fsanitize=address
+endif
 
 YACC=bison
 YFLAGS=-d -v
