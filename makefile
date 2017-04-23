@@ -1,5 +1,5 @@
 
-CC=gcc-6
+CC=gcc
 CFLAGS=-std=gnu11 -g -Wall -fno-omit-frame-pointer
 LDLIBS=
 LDFLAGS=
