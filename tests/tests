@@ -1,0 +1,27 @@
+#!/bin/bash
+
+exitcode=0
+
+expect () {
+    echo expect $1 = $2
+    $1
+    result=$?
+    if [[ $result == $2 ]]; then
+        echo pass
+    else
+        echo FAIL: $1 = $result
+        exitcode=$((1 + $exitcode))
+    fi
+}
+
+expect ./simple0 42
+expect ./simple1 3
+expect ./simple1.5 1
+expect ./simple2 10
+expect ./simple4 11
+expect ./simple5 30
+expect ./complex0 11
+
+# Exit with the number of failing tests
+exit $exitcode
+
