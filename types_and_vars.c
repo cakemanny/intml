@@ -47,6 +47,7 @@ static TypeExpr* lookup_typexpr(Symbol name)
     if (res)
         return res;
     assert(0 && "type not in type_names table");
+    abort(); // shut mingw-w64 up
 }
 
 static TypeExpr* deref_typexpr(Symbol name)

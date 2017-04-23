@@ -5,6 +5,10 @@
 #include "symbols.h"
 #include "grammar.tab.h"
 
+// This is already present in the output from flex 2.5.35 on Apple
+// But not present in the 2.5.4 version on gnuwin32.sourceforge.net
+int yylineno;
+
 %}
 
 INT     [1-9][0-9]*|0

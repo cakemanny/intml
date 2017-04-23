@@ -5,8 +5,10 @@ LDLIBS=
 LDFLAGS=
 
 ifndef NDEBUG
-  CFLAGS += -fsanitize=address
-  LDFLAGS += -fsanitize=address
+  ifneq "$(OS)" "Windows_NT"
+    CFLAGS += -fsanitize=address
+    LDFLAGS += -fsanitize=address
+  endif
 endif
 
 YACC=bison

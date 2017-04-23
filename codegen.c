@@ -323,7 +323,11 @@ static void store(int off, reg dst, reg src)
 }
 static void mov_imm(reg dst, long long intval)
 {
+#ifdef _WIN32
+    fprintf(cgenout,"\tmovq\t$%I64d, %s\n", intval, dst);
+#else
     fprintf(cgenout,"\tmovq\t$%lld, %s\n", intval, dst);
+#endif
 }
 static void mov(reg dst, reg src)
 {
@@ -380,13 +384,21 @@ static void call(const char* label)
 }
 static void alloc(int size)
 {
-    // wondering if we should do a
-    // push rbp; mov rsp rbp,
+    // We will need to abstract out the (calling a function) idea at some point
+#if defined(__APPLE__) && defined(__x86_64__)
     mov_imm("%rdi", size);
-#if defined(__APPLE__)
     call("_malloc");
-#else
+#elif defined(__linux__) && defined(__x86_64__)
+    mov_imm("%rdi", size);
     call("malloc");
+#elif defined(_WIN32) && defined(__x86_64__)
+    // allocate shadow space
+    ins2("subq", "$32", sp);
+    mov_imm("%rcx", size);
+    call("malloc");
+    ins2("addq", "$32", sp);
+#else
+#   error "Unknown platform"
 #endif
     // Now the address of the allocated memory is in rax
 }
@@ -434,7 +446,7 @@ static int argument_offset(Function* func)
 static char* function_label(Function* func)
 {
     char* pfn;
-    if (asprintf(&pfn, "%s__%ld", func->name, (func - function_table)) == -1) {
+    if (asprintf(&pfn, "%s__%ld", func->name, (long)(func - function_table)) == -1) {
         perror("out of memory");
         abort();
     }
@@ -736,7 +748,7 @@ static void emit_header()
 .text\n\
 .global start\n\
 start:\n\
-	andq	$-16, %rsp          # align stack\n\
+	andq	$-16, %rsp		# align stack\n\
 	callq	start__0\n\
 	movq	%rax, %rdi\n\
 	movq	$0x2000001, %rax\n\
@@ -756,9 +768,20 @@ _start:\n\
 	syscall\n\
 \n\
 ", cgenout);
+#elif defined(_WIN32) && defined(__x86_64__)
+    fputs("\
+.text\n\
+.global main\n\
+main:\n\
+	callq	start__0\n\
+	movq	%rax, %rcx\n\
+	callq	_exit\n\
+	ud2\n\
+\n\
+", cgenout);
 #else
-    // TODO: work out windows instructions
-# error "not yet defined"
+    // TODO: add linux arm support
+# error "Unsupported platform"
 #endif
 }
 
@@ -789,6 +812,21 @@ static size_t stack_size_of_type(TypeExpr* type)
     }
     abort();
 }
+
+#ifdef _WIN32
+static char * stpncpy(char* dst, const char* src, size_t len)
+{
+    while (len > 0 && *src != '\0') {
+        *dst++ = *src++;
+        --len;
+    }
+    char* end = dst;
+    while (len-- > 0) {
+        *dst++ = '\0';
+    }
+    return end;
+}
+#endif
 
 // Create name for infered anon functions created by multiple param function
 // The result must be freed by calling free
