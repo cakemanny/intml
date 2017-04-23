@@ -486,14 +486,18 @@ static void gen_sm_binop(Expr* expr)
 {
     gen_stack_machine_code(expr->left);     // left expression into r0
     push(r0);                               // save r0
+    push(r1);
     gen_stack_machine_code(expr->right);    // right expression into r0
+    pop(t1);
     pop(t0);                                // left expr into t0
 }
 static void gen_sm_binop_r(Expr* expr)
 {
     gen_stack_machine_code(expr->right);    // right expression into r0
     push(r0);                               // save r0
+    push(r1);
     gen_stack_machine_code(expr->left);     // left expression into r0
+    pop(r1);
     pop(t0);                                // right expr into t0
 }
 static void gen_stack_machine_code(Expr* expr)
@@ -648,6 +652,7 @@ static void gen_stack_machine_code(Expr* expr)
                 alloc(closure_size(func));  // Address in r0
                 store(-varx.stack_offset - WORD_SIZE, bp, r0); // Save Address
                 push("%r12");
+                push("%r13"); // Just do this one for alignment
                 mov("%r12", r0); // But also put somewhere useful too
 
                 int offset = 0;
@@ -665,10 +670,11 @@ static void gen_stack_machine_code(Expr* expr)
                     // Store
                     store(offset, "%r12", r0);
                     if (stack_size_of_type(c->param->type) > WORD_SIZE) {
-                        store(offset + WORD_SIZE, "%r12", t1);
+                        store(offset + WORD_SIZE, "%r12", r1);
                     }
                     offset += stack_size_of_type(c->param->type);
                 }
+                pop("%r13");
                 pop("%r12"); // restore r12 as per contract
             }
 
@@ -1047,18 +1053,6 @@ void codegen(DeclarationList* root)
             symbol(ENTRY_SYMBOL),
             typearrow(typename(symbol("unit")),typename(symbol("int"))));
     calculate_activation_records_expr(newroot, curr_func);
-
-    // Check we've been sensible
-    // 1. no duplicate fuction names
-    for (int i = 0; i < fn_table_count - 1; i++) {
-        for (int j = i + 1; j < fn_table_count; j++) {
-            if (function_table[i].name == function_table[j].name) {
-                fprintf(stderr, "**duplicate function: %s\n",
-                        function_table[i].name);
-                abort(); // compiler bug not ml programmer mistake
-            }
-        }
-    }
 
     if (debug_codegen) {
         print_function_table(stderr);
