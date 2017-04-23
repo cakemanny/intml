@@ -235,7 +235,7 @@ static void add_var_to_locals(Function* func, Symbol name, TypeExpr* type)
     Var* end = var_stack_ptr;
     int stack_offset = WORD_SIZE // Saved base pointer value
         // Result
-        + stack_size_of_type(func->type)
+        + stack_size_of_type(func->type->right)
         // &Closure
         + WORD_SIZE;
     for (Var* it = begin; it != end; ++it) {
@@ -309,9 +309,15 @@ static void sub(reg dst, reg minuend, reg amount)
         ins2("subq", amount, dst);
     }
 }
+static void loadc(reg dst, reg src, int off, const char* comment)
+{
+    fprintf(cgenout,"\tmovq\t%d(%s), %s", off, src, dst);
+    if (comment) fprintf(cgenout,"\t\t# %s\n", comment);
+    else fputs("\n", cgenout);
+}
 static void load(reg dst, reg src, int off)
 {
-    fprintf(cgenout,"\tmovq\t%d(%s), %s\n", off, src, dst);
+    loadc(dst, src, off, NULL);
 }
 static void store(int off, reg dst, reg src)
 {
@@ -394,14 +400,6 @@ static int closure_size(const Function* func)
 
 static int stack_required(const Function* func)
 {
-    if (debug_codegen) {
-        fprintf(stderr, PFX"calculating required stack\n");
-    }
-    if (debug_codegen) {
-        fprintf(stderr, PFX"Adding %d bytes for result\n",
-                (int)stack_size_of_type(func->type->right));
-        fprintf(stderr, PFX"Adding %d bytes for closure\n", (int)WORD_SIZE);
-    }
     int space = 0
         // Result
         + stack_size_of_type(func->type->right)
@@ -411,18 +409,12 @@ static int stack_required(const Function* func)
     for (int i = 0; i < var_table_count; i++) {
         const VarEx* v = &variable_table[i];
         if (v->func == func) {
-            if (debug_codegen) {
-                fprintf(stderr, PFX"Adding %d bytes %s\n", v->size, v->name);
-            }
             space += v->size;
         }
     }
     assert(WORD_SIZE != 16 && 16 % WORD_SIZE == 0);
     while (space % 16 != 0) {
         space += WORD_SIZE;
-        if (debug_codegen) {
-            fprintf(stderr, PFX"Aligning stack to 16 bytes %d: \n", space);
-        }
     }
     return space;
 }
@@ -561,8 +553,7 @@ static void gen_stack_machine_code(Expr* expr)
             }
             pop(r1); // pop closure ptr of function object is always first param
             pop(r0);
-            // Emit a callq *rax kinda thing
-            call_reg(r0);
+            call_reg(r0); // Emit a callq *rax kinda thing
             // if sizeof(result->type) == WORD_SIZE
             // then %rax
             // else %rax %rdi
@@ -577,13 +568,17 @@ static void gen_stack_machine_code(Expr* expr)
             if (expr->var_id != -1) { // It's a local variable
                 const VarEx var = variable_table[expr->var_id];
                 if (var.size > 0) {
+                    char* pfn; asprintf(&pfn, "var %s local w1", var.name);
                     // Should currently we are ordering struct members
                     // downwards... should we?
-                    load(r0, bp, -var.stack_offset); // Load word into r0
+                    loadc(r0, bp, -var.stack_offset, pfn); // Load word into r0
                     if (var.size > WORD_SIZE) {
+                        char* pfn2; asprintf(&pfn2, "var %s local w2", var.name);
                         // load subsequent word into r1 for "return"
-                        load(r1, bp, -var.stack_offset - WORD_SIZE);
+                        loadc(r1, bp, -var.stack_offset - WORD_SIZE, pfn2);
+                        free(pfn2);
                     }
+                    free(pfn);
                 }
             } else {
                 assert(expr->function_id != -1);
@@ -602,12 +597,15 @@ static void gen_stack_machine_code(Expr* expr)
                 }
                 assert(pos >= 0);
                 // load address of our closure
-                load(t0, bp, closure_offset(curr_func));
+                loadc(t0, bp, closure_offset(curr_func), "addr closure");
                 // load the value from closure memory
-                load(r0, t0, pos);
+                char* pfn; asprintf(&pfn, "var %s closure w1", expr->var);
+                loadc(r0, t0, pos, pfn);
+                pfn[strlen(pfn)-1] = '2';
                 if (stack_size_of_type(expr->type) > WORD_SIZE) {
-                    load(r1, t0, pos + WORD_SIZE);
+                    loadc(r1, t0, pos + WORD_SIZE, pfn);
                 }
+                free(pfn);
             }
             break;
         }
@@ -660,6 +658,7 @@ static void gen_stack_machine_code(Expr* expr)
                     // Create fake varnode so we can reuse the case VAR code
                     // above
                     Expr* varnode = var(c->param->name);
+                    varnode->type = c->param->type;
                     if (c->param->var_id >= 0) {
                         varnode->var_id = c->param->var_id;
                     } else {
