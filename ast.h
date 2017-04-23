@@ -81,6 +81,8 @@ struct Param {
     Symbol name;
     /* Maybe be either declared or deduced */
     TypeExpr* type;
+
+    int var_id; // we misuse these in a closure list and tag them as var
 };
 
 
@@ -131,7 +133,8 @@ struct Expr {
         };
         struct {
             Symbol  var;        /* VAR */
-            int     var_id;
+            int     var_id; // tag variables as they are used in the program text
+            int     function_id; // tag function that closes the variable
         };
         int         intval;     /* INTVAL */
         FuncExpr    func;       /* FUNC_EXPR */

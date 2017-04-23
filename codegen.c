@@ -48,6 +48,17 @@ main__f:
   the function references from above it
 
 */
+/*
+   Struct ABI (x86_64)
+   ----------
+   For multi-word values (e.g. func objects), use the argument registers
+   to return the subsequent bytes
+   |  0  |  1  |  2  |  3  |  4  |  5  |  6  |
+   | rax | rdi | rsi | rdx | rcx | r8  | r9  |
+
+   For storage in memory, words are ordered in increase offsets
+   For storage on the stack they are stored in decreasin offsets... (until we fix)
+*/
 
 /*
  * Some constants
@@ -172,18 +183,6 @@ static void push_var(Symbol name, TypeExpr* type)
     *var_stack_ptr++ = (Var){ .name = name, .type = type, .var_id = -1 };
 }
 
-static Var* lookup_var(Symbol name)
-{
-    Var* end = var_stack_ptr;
-    while (--end >= variable_stack) {
-        if (end->name == name) {
-            return end;
-        }
-    }
-    fprintf(stderr, EPFX"symbol not found: %s\n", name);
-    assert(0 && "symbol not found during codegen");
-}
-
 /*
  * Find a variable declaration only in current function
  */
@@ -255,40 +254,11 @@ static void add_var_to_locals(Function* func, Symbol name, TypeExpr* type)
     (var_stack_ptr - 1)->var_id = var_table_count - 1;
 }
 
-static Symbol global_name(Symbol name, SymList* hierachy)
-{
-    // Format
-    // module__toplevelbinding_bind1_bind2
-    static const char* module_name = "ml";
-    char buf[1024] = {};
-
-    // Check total possible length
-    int total_len = strlen(module_name) + 2 + strlen(name);
-    for (SymList* c = hierachy; c; c = c->next) {
-        total_len += 1 + strlen(c->name);
-    }
-    if (total_len > sizeof buf - 2) {
-        fprintf(stderr, EPFX"global name of %s too long\n", name);
-        // TODO: print hierachy
-        exit(EXIT_FAILURE);
-    }
-
-    int len = sizeof buf;
-    strncpy(buf, module_name, len);
-    strlcat(buf, "__", len);
-
-    // TODO: start with hierachy from end
-
-    strlcat(buf, name, len);
-    assert(strlen(buf) < sizeof buf - 1);
-
-    return symbol(buf);
-}
-
 // These functions are designed to look a bit like ARM intructions so
 // that we can easily port there
 typedef const char* reg;
 static reg r0 = "%rax";
+static reg r1 = "%rdi"; // first argument or second word of return
 static reg t0 = "%r10";
 static reg t1 = "%r11";
 static reg sp = "%rsp";
@@ -355,18 +325,6 @@ static void mov(reg dst, reg src)
 {
     ins2("movq", src, dst);
 }
-static void cmovl_imm(reg dst, long long intval)
-{
-    fprintf(cgenout,"\tcmovlq\t$%lld, %s\n", intval, dst);
-}
-static void cmovle_imm(reg dst, long long intval)
-{
-    fprintf(cgenout,"\tcmovleq\t$%lld, %s\n", intval, dst);
-}
-static void cmove_imm(reg dst, long long intval)
-{
-    fprintf(cgenout,"\tcmoveq\t$%lld, %s\n", intval, dst);
-}
 static void pop(reg dst)
 {
     ins1("popq", dst);
@@ -412,9 +370,38 @@ static void call_reg(reg op)
 {
     fprintf(cgenout,"\tcallq\t*%s\n", op);
 }
+static void call(const char* label)
+{
+    fprintf(cgenout, "	callq	%s\n", label);
+}
+static void alloc(int size)
+{
+    // wondering if we should do a
+    // push rbp; mov rsp rbp,
+    mov_imm("%rdi", size);
+    call("_malloc");
+    // Now the address of the allocated memory is in
+}
+
+static int closure_size(const Function* func)
+{
+    int size = 0;
+    for (ParamList* c = func->closure; c; c = c->next) {
+        size += stack_size_of_type(c->param->type);
+    }
+    return size;
+}
 
 static int stack_required(const Function* func)
 {
+    if (debug_codegen) {
+        fprintf(stderr, PFX"calculating required stack\n");
+    }
+    if (debug_codegen) {
+        fprintf(stderr, PFX"Adding %d bytes for result\n",
+                (int)stack_size_of_type(func->type->right));
+        fprintf(stderr, PFX"Adding %d bytes for closure\n", (int)WORD_SIZE);
+    }
     int space = 0
         // Result
         + stack_size_of_type(func->type->right)
@@ -424,7 +411,17 @@ static int stack_required(const Function* func)
     for (int i = 0; i < var_table_count; i++) {
         const VarEx* v = &variable_table[i];
         if (v->func == func) {
+            if (debug_codegen) {
+                fprintf(stderr, PFX"Adding %d bytes %s\n", v->size, v->name);
+            }
             space += v->size;
+        }
+    }
+    assert(WORD_SIZE != 16 && 16 % WORD_SIZE == 0);
+    while (space % 16 != 0) {
+        space += WORD_SIZE;
+        if (debug_codegen) {
+            fprintf(stderr, PFX"Aligning stack to 16 bytes %d: \n", space);
         }
     }
     return space;
@@ -433,7 +430,7 @@ static int stack_required(const Function* func)
 static int closure_offset(Function* func)
 {
     return -WORD_SIZE // skip base pointer
-        - stack_size_of_type(func->type->right);
+        - stack_size_of_type(func->type->right); // Skip result
 }
 static int argument_offset(Function* func)
 {
@@ -463,9 +460,11 @@ static void emit_fn_prologue(Function* func)
     fprintf(cgenout, "\tsubq\t$%d, %s\n", stack_required(func), sp);
     // Move ptr to closure into stack location
     store(closure_offset(func), bp, "%rdi");
-    store(argument_offset(func), bp, "%rsi");
-    if (stack_size_of_type(func->type->left) > WORD_SIZE) {
-        store(argument_offset(func), bp, "%rdx");
+    if (stack_size_of_type(func->type->left) > 0) {
+        store(argument_offset(func), bp, "%rsi");
+        if (stack_size_of_type(func->type->left) > WORD_SIZE) {
+            store(argument_offset(func) - WORD_SIZE, bp, "%rdx");
+        }
     }
 }
 static void emit_fn_epilogue(Function* func)
@@ -530,7 +529,7 @@ static void gen_stack_machine_code(Expr* expr)
         case LESSEQUAL:
         case EQUAL:
         {
-            gen_sm_binop(expr);
+            gen_sm_binop(expr); // only will work for single word values
             mov(t1, r0);
             mov_imm(r0, 0LL);
             cmp(t0, t1);
@@ -545,19 +544,24 @@ static void gen_stack_machine_code(Expr* expr)
         }
         case APPLY:
         {
-            gen_sm_binop_r(expr);
-            // now r0 = fn_ptr
-            // and t0 contains first word of arg
-            mov("%rsi", t0); // first word of argument
+            gen_stack_machine_code(expr->left);     // left expression into r0+
+            push(r0);
+            push(r1);
+            gen_stack_machine_code(expr->right);    // right expression into r0
+
+            // and r0 contains first word of arg (even if arg is () )
+            // and %rdi contains second word
+            mov("%rsi", r0); // first word of argument into second argument pos
             if (stack_size_of_type(expr->right->type) > WORD_SIZE) {
-                pop(t1); // pop closure ptr of argument Func object
-                mov("%rdx", t1); // move into argument 3
+                mov("%rdx", r1); // move into argument 3
             }
-            pop(t1); // pop closure ptr of function object
-            mov("%rdi", t1); // closure ptr is always first param
+            pop(r1); // pop closure ptr of function object is always first param
+            pop(r0);
             // Emit a callq *rax kinda thing
             call_reg(r0);
-            // TODO: work out where our result will have gone
+            // if sizeof(result->type) == WORD_SIZE
+            // then %rax
+            // else %rax %rdi
             break;
         }
         case VAR:
@@ -566,14 +570,39 @@ static void gen_stack_machine_code(Expr* expr)
             // 2. Need to know position the local lives in our activation
             // record, or in our closure
             // 3. Need to know the size of us and where to put us
-            assert(expr->var_id != -1); // only will work for locals atm...
-            const VarEx var = variable_table[expr->var_id];
-            if (var.size > 0) {
-                load(r0, bp, -var.stack_offset); // Load word into r0
-                if (var.size > WORD_SIZE) {
-                    // load subsequent word into t0, then spill
-                    load(t0, bp, -var.stack_offset - WORD_SIZE);
-                    push(t0);
+            if (expr->var_id != -1) { // It's a local variable
+                const VarEx var = variable_table[expr->var_id];
+                if (var.size > 0) {
+                    // Should currently we are ordering struct members
+                    // downwards... should we?
+                    load(r0, bp, -var.stack_offset); // Load word into r0
+                    if (var.size > WORD_SIZE) {
+                        // load subsequent word into r1 for "return"
+                        load(r1, bp, -var.stack_offset - WORD_SIZE);
+                    }
+                }
+            } else {
+                assert(expr->function_id != -1);
+                // We are in closure land
+                // What function are we in?
+                Function* curr_func = function_table + expr->function_id;
+                int pos = 0;
+                for (ParamList* c = curr_func->closure; c; c = c->next) {
+                    Param* param = c->param;
+                    if (expr->var == param->name) {
+                        break;
+                    }
+                    if (c->next) {
+                        pos += stack_size_of_type(param->type);
+                    } else pos = -1;
+                }
+                assert(pos >= 0);
+                // load address of our closure
+                load(t0, bp, closure_offset(curr_func));
+                // load the value from closure memory
+                load(r0, t0, pos);
+                if (stack_size_of_type(expr->type) > WORD_SIZE) {
+                    load(r1, t0, pos + WORD_SIZE);
                 }
             }
             break;
@@ -597,37 +626,51 @@ static void gen_stack_machine_code(Expr* expr)
             int after_function = request_label();
             b(after_function);
             Var* pre_param_stack_ptr = var_stack_ptr;
-            Function* func = &function_table[expr->func.function_id];
+            Function* func = function_table + expr->func.function_id;
             for (ParamList* c = expr->func.params; c; c = c->next) {
-                // TODO: create the series of functions and function objects
-                // which enumerate with each param
-                //enter_function(expr->func.name);
                 push_var(c->param->name, c->param->type);
                 emit_fn_prologue(func);
-                if (c->next) {
-                    assert(0 && "multi-params fns not supported yet");
-                    // Emit function def which allocates closure and
-                    // returns function object pointing to the next
-                    // function
-                    // TODO!
-                    emit_fn_epilogue(func);
-                    func++;
-                    assert(func->parent == (func - 1));
-                    emit_fn_prologue(func);
-
-                }
+                assert(c->next == NULL && "multi-params fns not supported");
             }
             gen_stack_machine_code(expr->func.body);
             emit_fn_epilogue(func);
             label(after_function);
             assert(expr->func.var_id != -1);
             assert(expr->func.var_id < var_table_count);
-            const VarEx var = variable_table[expr->func.var_id];
+            const VarEx varx = variable_table[expr->func.var_id];
             char* lbl = function_label(func);
             fprintf(cgenout, "\tleaq\t%s(%s), %s\n", lbl, "%rip", r0);
-            store(-var.stack_offset, bp, r0);
+            store(-varx.stack_offset, bp, r0);
             free(lbl);
-            // TODO: allocate closure, fill it and store in correct location
+            // allocate closure, fill it and store in correct location
+            if (closure_size(func) > 0) {
+                // Reduce stack usage, use callee-saved %r12
+                alloc(closure_size(func));  // Address in r0
+                store(-varx.stack_offset - WORD_SIZE, bp, r0); // Save Address
+                push("%r12");
+                mov("%r12", r0); // But also put somewhere useful too
+
+                int offset = 0;
+                for (ParamList* c = func->closure; c; c = c->next) {
+                    // Create fake varnode so we can reuse the case VAR code
+                    // above
+                    Expr* varnode = var(c->param->name);
+                    if (c->param->var_id >= 0) {
+                        varnode->var_id = c->param->var_id;
+                    } else {
+                        varnode->function_id = -1 - c->param->var_id;
+                    }
+                    gen_stack_machine_code(varnode); // Load value into r0,r1
+                    free(varnode);
+                    // Store
+                    store(offset, "%r12", r0);
+                    if (stack_size_of_type(c->param->type) > WORD_SIZE) {
+                        store(offset + WORD_SIZE, "%r12", t1);
+                    }
+                    offset += stack_size_of_type(c->param->type);
+                }
+                pop("%r12"); // restore r12 as per contract
+            }
 
             var_stack_ptr = pre_param_stack_ptr;
             push_var(expr->func.name, expr->func.functype);
@@ -637,23 +680,23 @@ static void gen_stack_machine_code(Expr* expr)
         }
         case BIND_EXPR:
         {
+            BindExpr* binding = &expr->binding;
             // Idea: emit the code for the init, assign the result
             // to a location on the stack, then emit code for the subexpr
-            gen_stack_machine_code(expr->binding.init);
-            // Now the result is in r0 for ints but in r0 and t0 for funcs
-            size_t init_result_size = stack_size_of_type(expr->binding.init->type);
-            if (init_result_size == WORD_SIZE) {
-                // TODO: store r0 into
-            } else if (init_result_size == 2 * WORD_SIZE) {
-                // TODO: store r0 onto stack
-                // TODO: store t1 onto stack
+            gen_stack_machine_code(binding->init);
+            // Now the result is in r0 for ints but in r0 and r1 for funcs
+            const VarEx var = variable_table[binding->var_id];
+            if (var.size > 0) {
+                store(-var.stack_offset, bp, r0); // Store r0 into stack
+                if (var.size > WORD_SIZE) {
+                    store(-var.stack_offset - WORD_SIZE, bp, r1);
+                }
             }
 
             Var* saved_stack_ptr = var_stack_ptr;
-            push_var(expr->binding.name, expr->binding.init->type);
-            gen_stack_machine_code(expr->binding.subexpr);
+            push_var(binding->name, binding->init->type);
+            gen_stack_machine_code(binding->subexpr);
             var_stack_ptr = saved_stack_ptr;
-            assert(0 && "let expressions not implmented yet");
             break;
         }
         case IF_EXPR:
@@ -686,6 +729,7 @@ static void emit_header()
 .text\n\
 .global start\n\
 start:\n\
+	andq	$-16, %rsp          # align stack\n\
 	callq	start__0\n\
 	movq	%rax, %rdi\n\
 	movq	$0x2000001, %rax\n\
@@ -706,7 +750,7 @@ static size_t stack_size_of_type(TypeExpr* type)
       case TYPE_NAME:
       {
         if (type->name == symbol("int")) {
-            return WORD_SIZE; // x86 only?
+            return WORD_SIZE;
         } else if (type->name == symbol("unit")) {
             return 0;
         }
@@ -762,6 +806,8 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
             // recursively add to the closure of each enclosing function
             // which does not contain the variable
             add_var_to_closure(curr_func, expr->var, expr->type);
+            // tag the function to find the closure it will be found in
+            expr->function_id = fn_table_count - 1;
         } else {
             // Tag the var with the var_id
             expr->var_id = var->var_id;
@@ -785,6 +831,7 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
                 // the function table
                 expr->func.function_id = fn_table_count;
             } else {
+                assert(0);
                 char* pfn = name_param_func(expr->func.name, param_count);
                 func_name = symbol(pfn);
                 free(pfn);
@@ -794,8 +841,25 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
             add_var_to_locals(curr_func, c->param->name, c->param->type);
         }
         calculate_activation_records_expr(expr->func.body, curr_func);
+        // Here at this point, as we descend out of the tree, we ought to
+        // react to what has happened within us.
+        // The closed variables were added to the head, so reverse
+        curr_func->closure = reverse_params(curr_func->closure);
+        // Want to work out where each var in the closure can come from
+        for (ParamList* c = curr_func->closure; c; c = c->next) {
+            Var* var = lookup_var_in_func(pre_param_curr_func, c->param->name);
+            if (!var) {
+                // Tag as coming from closure
+                int function_id = (pre_param_curr_func - function_table);
+                c->param->var_id = -1 - function_id;
+            } else {
+                // Tag param
+                c->param->var_id = var->var_id;
+            }
+        }
+        // want to rewrite node as closure type node!
 
-        // we no longer see the params in the subexpr so restore var stack and
+        // We no longer see the params in the subexpr so restore var stack and
         // restore curr_func
         var_stack_ptr = pre_param_stack_ptr;
         curr_func = pre_param_curr_func;
@@ -814,6 +878,7 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
         calculate_activation_records_expr(expr->binding.init, curr_func);
         Var* saved_stack_ptr = var_stack_ptr;
         add_var_to_locals(curr_func, expr->binding.name, expr->binding.init->type);
+        expr->binding.var_id = (var_stack_ptr - 1)->var_id;
 
         calculate_activation_records_expr(expr->binding.subexpr, curr_func);
         var_stack_ptr = saved_stack_ptr;
@@ -824,6 +889,75 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
         calculate_activation_records_expr(expr->condition, curr_func);
         calculate_activation_records_expr(expr->btrue, curr_func);
         calculate_activation_records_expr(expr->bfalse, curr_func);
+        break;
+      }
+    }
+}
+
+/*
+ * Change multiple parametered functions into real functions of one
+ * parameter e.g. change:
+ *   let f x y = x * y in ...
+ * into:
+ *   let f x = let f_ y = x * y in f_ in ...
+ */
+static void rewrite_functions(Expr* expr)
+{
+    switch (expr->tag) {
+      case PLUS:
+      case MINUS:
+      case MULTIPLY:
+      case DIVIDE:
+      case LESSTHAN:
+      case LESSEQUAL:
+      case EQUAL:
+      case APPLY:
+        rewrite_functions(expr->left);
+        rewrite_functions(expr->right);
+        break;
+      case VAR:
+      case UNITVAL:
+      case INTVAL:
+        break;
+      case FUNC_EXPR:
+      {
+        if (expr->func.params->next) {
+            // rewrite
+            char* pfn = name_param_func(expr->func.name, 1);
+            Symbol new_name = symbol(pfn);
+            free(pfn);
+            expr->func.body =
+                local_func(
+                        new_name,
+                        expr->func.params->next,
+                        expr->func.body,
+                        var(new_name));
+            expr->func.params->next = NULL;
+        }
+        // Recurse
+        rewrite_functions(expr->func.body);
+        if (!expr->func.body->type) {
+            // It can only have one param now!
+            Expr* body = expr->func.body;
+            body->type = typearrow(
+                    body->func.params->param->type, body->func.body->type);
+            body->func.functype
+                = body->func.subexpr->type
+                = body->type;
+        }
+        rewrite_functions(expr->func.subexpr);
+      }
+      case BIND_EXPR:
+      {
+        rewrite_functions(expr->binding.init);
+        rewrite_functions(expr->binding.subexpr);
+        break;
+      }
+      case IF_EXPR:
+      {
+        rewrite_functions(expr->condition);
+        rewrite_functions(expr->btrue);
+        rewrite_functions(expr->bfalse);
         break;
       }
     }
@@ -898,6 +1032,12 @@ void codegen(DeclarationList* root)
     Expr* newroot = restructure_tree(root);
     if (debug_codegen) {
         fputs("restructured tree:\n\t", stderr);
+        print_expr(stderr, newroot);
+        fputs("\n", stderr);
+    }
+    rewrite_functions(newroot);
+    if (debug_codegen) {
+        fputs("rewritten functions:\n\t", stderr);
         print_expr(stderr, newroot);
         fputs("\n", stderr);
     }

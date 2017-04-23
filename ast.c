@@ -88,6 +88,7 @@ Param* param_with_type(Symbol name, TypeExpr* type)
     Param* param = xmalloc(sizeof *param);
     param->name = name;
     param->type = type;
+    param->var_id = -1;
     return param;
 
 }
@@ -185,6 +186,7 @@ Expr* var(Symbol name)
     Expr* result = expr(VAR);
     result->var = name;
     result->var_id = -1;
+    result->function_id = -1;
     return result;
 }
 
