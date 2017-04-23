@@ -9,7 +9,7 @@ LDFLAGS=
 LDLIBS=-lc
 
 ifeq "$(PLATFORM)" "Darwin"
-#  LDFLAGS += -macosx_version_min $(shell sw_vers -productVersion)
+  LDFLAGS += -macosx_version_min $(shell sw_vers -productVersion)
 endif
 ifeq "$(OS)" "Windows_NT"
   # on windows it was easier just to use the C compiler to link
