@@ -7,3 +7,6 @@ lex.yy.*
 *.output
 grammar.tab.*
 
+#tmp dir for temporary things in life
+/tmp
+

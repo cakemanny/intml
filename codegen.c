@@ -1,3 +1,4 @@
+#define _GNU_SOURCE // ask stdio to include asprintf
 #include "codegen.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -382,8 +383,12 @@ static void alloc(int size)
     // wondering if we should do a
     // push rbp; mov rsp rbp,
     mov_imm("%rdi", size);
+#if defined(__APPLE__)
     call("_malloc");
-    // Now the address of the allocated memory is in
+#else
+    call("malloc");
+#endif
+    // Now the address of the allocated memory is in rax
 }
 
 static int closure_size(const Function* func)
@@ -726,7 +731,7 @@ static void gen_stack_machine_code(Expr* expr)
 static void emit_header()
 {
 #if defined(__APPLE__) && defined(__x86_64__)
-
+    // perhaps we should call _exit in the c library for OS X...
     fputs("\
 .text\n\
 .global start\n\
@@ -737,8 +742,22 @@ start:\n\
 	movq	$0x2000001, %rax\n\
 	syscall\n\
 ", cgenout);
+#elif defined(__linux__) && defined(__x86_64__)
+    fputs("\
+.section .interp\n\
+	.string \"/lib64/ld-linux-x86-64.so.2\"\n\
+.text\n\
+.global _start\n\
+_start:\n\
+	andq	$-16, %rsp		# align stack\n\
+	callq	start__0\n\
+	movq	%rax, %rdi\n\
+	movq	$60, %rax		# _exit\n\
+	syscall\n\
+\n\
+", cgenout);
 #else
-    // TODO: work out the linux / windows instruction
+    // TODO: work out windows instructions
 # error "not yet defined"
 #endif
 }
