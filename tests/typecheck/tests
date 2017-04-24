@@ -1,0 +1,70 @@
+#!/bin/bash
+
+intml=../../intml
+# add a main function to make codegen happy
+end=" let main () = 0"
+red=$(tput setaf 1)
+green=$(tput setaf 2)
+reset=$(tput sgr0)
+
+failures=0
+
+expect_fail() {
+    code=$1
+    if (echo "$code$end" | $intml -o /dev/null - >/dev/null 2>&1); then
+        echo "${red}fail:${reset} compiled without error: $code"
+        failures=$(($failures + 1))
+    else
+        echo "${green}pass:${reset} did not compile: $code"
+    fi
+}
+expect_pass() {
+    code=$1
+    if (echo "$code$end" | $intml -o /dev/null -); then
+        echo "${green}pass:${reset} compiled: $code"
+    else
+        echo "${red}fail:${reset} did not compile: $code"
+        failures=$(($failures + 1))
+    fi
+}
+
+
+expect_fail "let x = 1 + ()"
+expect_fail "let x = () + 1"
+expect_fail "let x = () + ()"
+expect_pass "let x = 1 + 1"
+expect_pass "let x = () = ()"   # comparing units is allowed!
+expect_fail "let x = () = 1"   # comparing ints and units is not!
+expect_fail "let x = 1 = ()"   # comparing ints and units is not!
+
+# deduce the type of the parameter from the expression it's used in
+expect_pass "let f x = x * 2"
+# And iteratively allow that function to impose it's type on another
+expect_pass "let f x = x * 49   let g x = f x"
+
+# ints are not functions
+expect_fail "let f (x:int) = x x"
+
+# some fun with functions
+expect_pass "let apply (f:int -> int) x = f x"
+expect_pass "let fincr (f: unit -> int) = let g () = 1 + f () in g"
+# and with some inference
+expect_pass "let fincr f = let g () = 1 + f () in g"
+
+# Want to be able to infer the type of an earlier function from it's use
+# 10:int && infer 10 => x = 10 in infer x = x => x:int
+expect_pass "let infer x = x    let deduce = infer 10"
+
+# ('a + ? => 'a:int) && f x = x => int = typeof(f x) = typeof(x)
+expect_pass "let f x = x    let y = f y + f y"
+
+# type aliases
+expect_pass "type metre = int   let f (w:metre) (h:metre) = w * h / 2"
+expect_pass "type intfunc = int -> int  let apply (f:intfunc) x = f x"
+
+if [[ $failures == 1 ]]; then
+    echo 1 failure
+else
+    echo $failures failures
+fi
+

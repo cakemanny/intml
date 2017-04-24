@@ -646,6 +646,8 @@ static void gen_stack_machine_code(Expr* expr)
             for (ParamList* c = expr->func.params; c; c = c->next) {
                 push_var(c->param->name, c->param->type);
                 emit_fn_prologue(func);
+                // Should not be possible since we rewrote the tree to
+                // be single param only
                 assert(c->next == NULL && "multi-params fns not supported");
             }
             gen_stack_machine_code(expr->func.body);
@@ -746,13 +748,13 @@ static void emit_header()
     // perhaps we should call _exit in the c library for OS X...
     fputs("\
 .text\n\
-.global start\n\
-start:\n\
+.global _main\n\
+_main:\n\
 	andq	$-16, %rsp		# align stack\n\
 	callq	start__0\n\
 	movq	%rax, %rdi\n\
-	movq	$0x2000001, %rax\n\
-	syscall\n\
+	callq	_exit\n\
+	ud2\n\
 ", cgenout);
 #elif defined(__linux__) && defined(__x86_64__)
     fputs("\
@@ -799,6 +801,11 @@ static size_t stack_size_of_type(TypeExpr* type)
             return 0;
         }
         fprintf(stderr, "%s\n", type->name);
+        // FIXME: we either need to keep type map in here, fully expand the
+        // types in the typechecker or annotate the types with size
+        // information in the typechecker...
+        // fully expand is probably not the answer, since we will want
+        // recursive types at some point
         assert(0 && "unknown typename");
       }
       case TYPE_ARROW:
@@ -880,25 +887,17 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
       {
         Var* pre_param_stack_ptr = var_stack_ptr;
         Function* pre_param_curr_func = curr_func;
-        int param_count = 0;
-        TypeExpr* func_type = expr->func.functype;
-        for (ParamList* c = expr->func.params; c; c = c->next, param_count++,
-                func_type = func_type->right) {
-            Symbol func_name = NULL;
-            if (param_count == 0) {
-                func_name = expr->func.name;
-                // The next call to add_function will place the function in
-                // the function table
-                expr->func.function_id = fn_table_count;
-            } else {
-                assert(0);
-                char* pfn = name_param_func(expr->func.name, param_count);
-                func_name = symbol(pfn);
-                free(pfn);
-            }
-            curr_func = add_function_w_parent(func_name, func_type, curr_func);
+        {
+            TypeExpr* func_type = expr->func.functype;
+            assert(expr->func.params->next == NULL);
+            Param* param = expr->func.params->param;
+            // The next call to add_function will place the function in
+            // the function table
+            expr->func.function_id = fn_table_count;
+            curr_func =
+                add_function_w_parent(expr->func.name, func_type, curr_func);
             // treat parameters like the first local
-            add_var_to_locals(curr_func, c->param->name, c->param->type);
+            add_var_to_locals(curr_func, param->name, param->type);
         }
         calculate_activation_records_expr(expr->func.body, curr_func);
         // Here at this point, as we descend out of the tree, we ought to
@@ -917,7 +916,7 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
                 c->param->var_id = var->var_id;
             }
         }
-        // want to rewrite node as closure type node!
+        // want to rewrite node as closure type node at some point...
 
         // We no longer see the params in the subexpr so restore var stack and
         // restore curr_func

@@ -32,6 +32,11 @@ static struct Var {
 static struct Var* var_stack_ptr = variable_stack;
 
 
+/* make life easier printing debug messaged */
+#define dbgprint(M, ...) do { \
+    if (debug_type_checker) { fprintf(stderr, PFX M, ##__VA_ARGS__); } \
+} while(0)
+
 static TypeExpr* lookup_ornull_typexpr(Symbol name)
 {
     for (int i = 0; i < type_name_count; i++) {
@@ -142,9 +147,7 @@ static void add_type_name(Type* node)
                     node->name);
             exit(EXIT_FAILURE);
         }
-        if (debug_type_checker) {
-            fprintf(stdout, "typecheck: adding named type: %s\n", node->name);
-        }
+        dbgprint("adding named type: %s\n", node->name);
         type_names[type_name_count++] = node;
     } else {
         fprintf(stderr, EPFX"more than %d typenames defined\n", TYPE_NAMES_MAX);
@@ -168,12 +171,12 @@ static void push_var(Symbol name, TypeExpr* type)
         exit(EXIT_FAILURE);
     }
     if (debug_type_checker) {
-        printf("typecheck: pushing var %s", name);
+        fprintf(stderr, PFX"pushing var %s", name);
         if (type) {
-            printf(" : ");
-            print_typexpr(stdout, type);
+            fprintf(stderr, " : ");
+            print_typexpr(stderr, type);
         }
-        fputs("\n", stdout);
+        fputs("\n", stderr);
     }
     *var_stack_ptr++ = (struct Var) { name, type };
 }
@@ -229,9 +232,9 @@ static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
             if (!expr->left->type) {
                 newtype = typearrow(newtype, expr->right->type);
                 if (debug_type_checker) {
-                    printf("typecheck: updating imposing type to ");
-                    print_typexpr(stdout, newtype);
-                    printf(" for left side of apply\n");
+                    fprintf(stderr, PFX"updating imposing type to ");
+                    print_typexpr(stderr, newtype);
+                    fprintf(stderr, " for left side of apply\n");
                 }
                 return imposetypeon_expr(expr->left, newtype);
             }
@@ -242,9 +245,9 @@ static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
       {
         if (!expr->type) {
             if (debug_type_checker) {
-                printf("typecheck: imposing type ");
-                print_typexpr(stdout, newtype);
-                printf(" on free variable %s\n", expr->var);
+                fprintf(stderr, PFX"imposing type ");
+                print_typexpr(stderr, newtype);
+                fprintf(stderr, " on free variable %s\n", expr->var);
             }
             expr->type = newtype;
             return 1;
@@ -292,15 +295,22 @@ static const char * expr_name(enum ExprTag tag)
     return expr_name[tag];
 }
 
+#define typexprs_equal_or_exit(ET,AT,M,...) do {                \
+            TypeExpr* __et = (ET);                              \
+            TypeExpr* __at = (AT);                              \
+            if (!typexpr_equals(__et, __at)) {                  \
+                fprintf(stderr, EPFX M "\n", ##__VA_ARGS__);    \
+                print_type_error(__et, __at);                   \
+                exit(EXIT_FAILURE);                             \
+            }                                                   \
+        } while (0)
+
 static int deducetype_expr(Expr* expr)
 {
     TypeExpr* int_type = lookup_typexpr(symbol("int"));
     TypeExpr* unit_type = lookup_typexpr(symbol("unit"));
 
-    if (debug_type_checker) {
-        printf("typecheck: deduce type of %s expression\n",
-                expr_name(expr->tag));
-    }
+    dbgprint("deduce type of %s expression\n", expr_name(expr->tag));
 
     /*
      * Pattern to use:
@@ -325,36 +335,25 @@ static int deducetype_expr(Expr* expr)
         TypeExpr* left_type = expr->left->type;
         TypeExpr* right_type = expr->right->type;
 
+
         if (left_type) {
-            if (!typexpr_equals(int_type, left_type)) {
-                fprintf(stderr, EPFX"left side of %s expression\n",
-                        expr_name(expr->tag));
-                print_type_error(int_type, left_type);
-                exit(EXIT_FAILURE);
-            }
+            typexprs_equal_or_exit(int_type, left_type,
+                    "left side of %s expression", expr_name(expr->tag));
         } else {
             // Come back and impose types on free variables
             types_added += imposetypeon_expr(expr->left, int_type);
         }
         if (right_type) {
-            if (!typexpr_equals(int_type, right_type)) {
-                fprintf(stderr, EPFX"right side of %s expression\n",
-                        expr_name(expr->tag));
-                print_type_error(int_type, right_type);
-                exit(EXIT_FAILURE);
-            }
+            typexprs_equal_or_exit(int_type, right_type,
+                    "right side of %s expression", expr_name(expr->tag));
         } else {
             // Come back and impose types on free variables
             types_added += imposetypeon_expr(expr->right, int_type);
         }
         // type should be int
         if (expr->type) {
-            if (!typexpr_equals(int_type, expr->type)) {
-                fprintf(stderr, EPFX"%s expression\n",
-                        expr_name(expr->tag));
-                print_type_error(int_type, expr->type);
-                exit(EXIT_FAILURE);
-            }
+            typexprs_equal_or_exit(int_type, expr->type,
+                    "%s expression", expr_name(expr->tag));
         } else {
             expr->type = int_type;
             types_added++;
@@ -370,12 +369,8 @@ static int deducetype_expr(Expr* expr)
 
         if (left_type && right_type) {
             // compare!
-            if (!typexpr_equals(left_type, right_type)) {
-                fprintf(stderr, EPFX"right right of equals expression does "
-                        "not match left side\n");
-                print_type_error(left_type, right_type);
-                exit(EXIT_FAILURE);
-            }
+            typexprs_equal_or_exit(left_type, right_type, "right right of "
+                    "equals expression does not match left side");
         } else if (left_type) {
             expr->right->type = left_type;
             types_added++;
@@ -385,18 +380,13 @@ static int deducetype_expr(Expr* expr)
             types_added++;
             types_added += imposetypeon_expr(expr->left, right_type);
         } else {
-            if (debug_type_checker) {
-                printf("typecheck: unabled to work out type of either side "
-                        "of equals expression\n");
-            }
+            dbgprint("unable to work out type of either "
+                    "side of equals expression\n");
+            // TODO: assign same type variable to each side
         }
 
         if (expr->type) {
-            if (!typexpr_equals(int_type, expr->type)) {
-                fprintf(stderr, EPFX"equals expression\n");
-                print_type_error(int_type, expr->type);
-                exit(EXIT_FAILURE);
-            }
+            typexprs_equal_or_exit(int_type, expr->type, "equals expression");
         } else {
             if (left_type) {
                 expr->type = int_type;
@@ -417,12 +407,10 @@ static int deducetype_expr(Expr* expr)
         if (left_type) {
             if (left_type->tag != TYPE_ARROW) {
                 if (deref_typexpr(left_type->name)->tag == TYPE_ARROW) {
-                    left_type =
-                        deref_typexpr(left_type->name);
+                    left_type = deref_typexpr(left_type->name);
                 } else {
-                    fprintf(stderr, EPFX"left side of apply "
-                            "expression must be a function\n");
-                    fprintf(stderr, "  expected: ");
+                    fprintf(stderr, EPFX"left side of apply expression "
+                            "must be a function\n  expected: ");
                     print_typexpr(stderr, right_type);
                     fprintf(stderr, " -> 'b\n  actual: ");
                     print_typexpr(stderr, left_type);
@@ -431,13 +419,8 @@ static int deducetype_expr(Expr* expr)
                 }
             }
             if (right_type) {
-                if (!typexpr_equals(
-                            left_type->left, right_type)) {
-                    fprintf(stderr, EPFX"right side of apply expression\n");
-                    print_type_error(
-                            left_type->left, right_type);
-                    exit(EXIT_FAILURE);
-                }
+                typexprs_equal_or_exit(left_type->left, right_type,
+                        "right side of apply expression");
             } else {
                 // impose left on right
                 expr->right->type = left_type->left;
@@ -446,37 +429,27 @@ static int deducetype_expr(Expr* expr)
         } else if (right_type) {
             // impose right on left?
             if (debug_type_checker) {
-                printf("typecheck: need parent to work out type of function ");
-                print_typexpr(stdout, right_type);
-                printf(" -> 'b\n");
+                fprintf(stderr, PFX"need parent to work out type of function ");
+                print_typexpr(stderr, right_type);
+                fprintf(stderr, " -> 'b\n");
             }
         } else {
-            if (debug_type_checker) {
-                printf("typecheck: no idea how to work out type of apply "
-                        "expression\n");
-            }
+            dbgprint("no idea how to work out type of apply expression\n");
         }
 
         if (expr->type) {
             if (left_type) {
-                if (!typexpr_equals(left_type->right, expr->type)) {
-                    fprintf(stderr, EPFX"type of apply expression does "
-                            "not match result type of function on left\n");
-                    print_type_error(left_type->right, expr->type);
-                    exit(EXIT_FAILURE);
-                }
+                typexprs_equal_or_exit(left_type->right, expr->type,
+                        "type of apply expression does not match result "
+                        "type of function on left");
             }
             if (expr->right->type) {
                 // we can work out the type of the function
                 TypeExpr* inferred_type = typearrow(expr->right->type, expr->type);
                 if (expr->left->type) {
-                    if (!typexpr_equals(expr->left->type, inferred_type)) {
-                        fprintf(stderr, EPFX"type of (RHS -> apply expr) "
-                                "does not match the function type\n");
-                        print_type_error(expr->left->type, inferred_type);
-                        free((void*)inferred_type);
-                        exit(EXIT_FAILURE);
-                    }
+                    typexprs_equal_or_exit(expr->left->type, inferred_type,
+                            "type of (RHS -> apply expr) does not match "
+                            "the function type");
                     free((void*)inferred_type);
                 } else {
                     expr->left->type = inferred_type;
@@ -499,34 +472,21 @@ static int deducetype_expr(Expr* expr)
         TypeExpr* found_type = found_var->type;
         if (expr->type) {
             if (found_type) {
-                if (!typexpr_equals(found_type, expr->type)) {
-                    fprintf(stderr, EPFX"var expression type did not "
-                            "match previously known type for %s\n",
-                            expr->var);
-                    print_type_error(found_type, expr->type);
-                    exit(EXIT_FAILURE);
-                }
+                typexprs_equal_or_exit(found_type, expr->type,
+                        "var expression type did not match previously "
+                        "known type for %s", expr->var);
             } else {
-                if (debug_type_checker) {
-                    printf("typecheck: infering var %s type from "
-                            "expression\n", expr->var);
-                }
+                dbgprint("infering var %s type from expression\n", expr->var);
                 found_var->type = found_type = expr->type;
             }
             return 0;
         } else {
             if (found_type) {
-                if (debug_type_checker) {
-                    printf("typecheck: type of %s found in lookup\n",
-                            expr->var);
-                }
+                dbgprint("type of %s found in lookup\n", expr->var);
                 expr->type = found_type;
                 return 1;
             } else {
-                if (debug_type_checker) {
-                    printf("typecheck: type of %s not known yet\n",
-                            expr->var);
-                }
+                dbgprint("type of %s not known yet\n", expr->var);
                 return 0;
             }
         }
@@ -590,18 +550,15 @@ static int deducetype_expr(Expr* expr)
                     if (it->type) {
                         if (param->type) {
                             // compare
-                            if (!typexpr_equals(it->type, param->type)) {
-                                fprintf(stderr,EPFX"param %s of function %s\n",
-                                        it->name, expr->func.name);
-                                print_type_error(it->type, param->type);
-                                exit(EXIT_FAILURE);
-                            }
+                            typexprs_equal_or_exit(it->type, param->type,
+                                    "param %s of function %s",
+                                    it->name, expr->func.name);
                         } else {
                             if (debug_type_checker) {
-                                printf("typecheck: type of param %s deduced as ",
-                                        it->name);
-                                print_typexpr(stdout, it->type);
-                                fputs("\n", stdout);
+                                fprintf(stderr, PFX"type of param %s deduced "
+                                        "as ", it->name);
+                                print_typexpr(stderr, it->type);
+                                fputs("\n", stderr);
                             }
                             param->type = it->type;
                             ++types_added;
@@ -636,18 +593,14 @@ static int deducetype_expr(Expr* expr)
                 func_type = typearrow(it->type, func_type);
             }
             if (debug_type_checker) {
-                printf("typecheck: worked out func %s has type: ", expr->func.name);
-                print_typexpr(stdout, func_type);
-                fputs("\n", stdout);
+                fprintf(stderr, PFX"worked out func %s has type: ", expr->func.name);
+                print_typexpr(stderr, func_type);
+                fputs("\n", stderr);
             }
 
             if (expr->func.functype) {
-                if (!typexpr_equals(func_type, expr->func.functype)) {
-                    fprintf(stderr, EPFX"type of function %s\n",
-                            expr->func.name);
-                    print_type_error(func_type, expr->func.functype);
-                    exit(EXIT_FAILURE);
-                }
+                typexprs_equal_or_exit(func_type, expr->func.functype,
+                        "type of function %s", expr->func.name);
             } else {
                 expr->func.functype = func_type;
                 types_added++;
@@ -664,12 +617,9 @@ static int deducetype_expr(Expr* expr)
 
         if (expr->type) {
             if (subexprtype) {
-                if (!typexpr_equals(subexprtype, expr->type)) {
-                    fprintf(stderr, EPFX"recorded type of expression "
-                            "following %s definition", expr->func.name);
-                    print_type_error(subexprtype, expr->type);
-                    exit(EXIT_FAILURE);
-                }
+                typexprs_equal_or_exit(subexprtype, expr->type,
+                        "recorded type of expression following %s "
+                        "definition", expr->func.name);
             } else {
                 expr->func.subexpr->type = expr->type;
                 types_added++;
@@ -688,25 +638,12 @@ static int deducetype_expr(Expr* expr)
         // TODO: do something useful with this
         if (debug_type_checker) {
             if (!func_type && pre_param_stack_ptr->type) {
-                printf("typecheck: funcvar %s now has type: ",
+                fprintf(stderr, PFX"funcvar %s now has type: ",
                         pre_param_stack_ptr->name);
-                print_typexpr(stdout, pre_param_stack_ptr->type);
-                fputs("\n", stdout);
+                print_typexpr(stderr, pre_param_stack_ptr->type);
+                fputs("\n", stderr);
             }
         }
-
-        /*
-         * It's probably easier just to leak this memory rather than worry
-         * about who might now be holding references to it
-         * OR PERHAPS, perhaps it ouught to be pinned to our tree
-         */
-        //if (func_type) {
-        //    for (int i = 0; i < num_params; i++) {
-        //        TypeExpr* tmp = func_type;
-        //        func_type = func_type->right;
-        //        free((void*)tmp);
-        //    }
-        //}
 
         var_stack_ptr = pre_param_stack_ptr;
         return types_added;
@@ -721,9 +658,9 @@ static int deducetype_expr(Expr* expr)
         TypeExpr* init_type = expr->binding.init->type;
         if (init_type) {
             if (debug_type_checker) {
-                printf("typecheck: deduced type for %s as ", expr->binding.name);
-                print_typexpr(stdout, init_type);
-                fputs("\n", stdout);
+                fprintf(stderr, PFX"deduced type for %s as ", expr->binding.name);
+                print_typexpr(stderr, init_type);
+                fputs("\n", stderr);
             }
         }
 
@@ -735,13 +672,9 @@ static int deducetype_expr(Expr* expr)
 
         if (expr->type) {
             if (subexprtype) {
-                if (!typexpr_equals(subexprtype, expr->type)) {
-                    fprintf(stderr, EPFX"conflicting types for expression "
-                            "following binding of %s ", expr->binding.name);
-                    print_type_error(subexprtype, expr->type);
-                    fputs("\n", stdout);
-                    exit(EXIT_FAILURE);
-                }
+                typexprs_equal_or_exit(subexprtype, expr->type,
+                        "conflicting types for expression following "
+                        "binding of %s ", expr->binding.name);
             } else {
                 expr->binding.subexpr->type = expr->type;
                 types_added++;
@@ -755,10 +688,10 @@ static int deducetype_expr(Expr* expr)
 
         if (!init_type && saved_stack_ptr->type) {
             if (debug_type_checker) {
-                printf("typecheck: the type of %s was deduced by it's use "
+                fprintf(stderr, PFX"the type of %s was deduced by it's use "
                         "in the subseqent subexpression: ", expr->binding.name);
-                print_typexpr(stdout, saved_stack_ptr->type);
-                fputs("\n", stdout);
+                print_typexpr(stderr, saved_stack_ptr->type);
+                fputs("\n", stderr);
             }
             expr->binding.init->type = saved_stack_ptr->type;
             types_added++;
@@ -776,11 +709,8 @@ static int deducetype_expr(Expr* expr)
 
         // start by enforce int_type on the condition
         if (expr->condition->type) {
-            if (!typexpr_equals(int_type, expr->condition->type)) {
-                fprintf(stderr, EPFX"condition of if expression\n");
-                print_type_error(int_type, expr->condition->type);
-                exit(EXIT_FAILURE);
-            }
+            typexprs_equal_or_exit(int_type, expr->condition->type,
+                    "condition of if expression");
         } else {
             types_added += imposetypeon_expr(expr->condition, int_type);
         }
@@ -790,12 +720,8 @@ static int deducetype_expr(Expr* expr)
 
         if (true_type && false_type) {
             // compare!
-            if (!typexpr_equals(true_type, false_type)) {
-                fprintf(stderr, EPFX"true and false branches of if "
-                        "expression with different types\n");
-                print_type_error(true_type, false_type);
-                exit(EXIT_FAILURE);
-            }
+            typexprs_equal_or_exit(true_type, false_type, "true and false "
+                    "branches of if expression with different types");
         } else if (true_type) {
             expr->bfalse->type = true_type;
             types_added++;
@@ -805,18 +731,12 @@ static int deducetype_expr(Expr* expr)
             types_added++;
             types_added += imposetypeon_expr(expr->btrue, false_type);
         } else {
-            if (debug_type_checker) {
-                printf("typecheck: unabled to work out type of either branch "
-                        "of if expression\n");
-            }
+            dbgprint("unable to work out type of either "
+                    "branch of if expression\n");
         }
 
         if (expr->type) {
-            if (!typexpr_equals(int_type, expr->type)) {
-                fprintf(stderr, EPFX"if expression\n");
-                print_type_error(int_type, expr->type);
-                exit(EXIT_FAILURE);
-            }
+            typexprs_equal_or_exit(int_type, expr->type, "if expression");
         } else {
             if (true_type) {
                 expr->type = int_type;
@@ -880,32 +800,27 @@ static void type_and_check_exhaustively(DeclarationList* root)
               case DECL_BIND:
               {
                 Binding binding = decl->binding;
-                if (debug_type_checker) {
-                    fprintf(stdout, "typecheck: deducing type for toplevel "
-                            "binding %s\n", binding.name);
-                }
+                dbgprint("deducing type for toplevel binding %s\n", binding.name);
                 types_added += deducetype_expr(binding.init);
                 TypeExpr* init_type = binding.init->type;
 
                 if (debug_type_checker) {
                     if (init_type) {
-                        fprintf(stdout, "typecheck: deduced type ");
-                        print_typexpr(stdout, init_type);
-                        fputs("\n", stdout);
+                        fprintf(stderr, PFX"deduced type ");
+                        print_typexpr(stderr, init_type);
+                        fputs("\n", stderr);
                     } else {
-                        fprintf(stdout, "typecheck: unable to deduce type for "
+                        fprintf(stderr, PFX"unable to deduce type for "
                                 "top level binding %s\n", binding.name);
                     }
                 }
 
                 if (init_type) {
                     if (binding.type) {
-                        if (!typexpr_equals(binding.type, init_type)) {
-                            fprintf(stderr, EPFX"type annotation "
-                                    "does not matched deduced type for "
-                                    "toplevel binding %s\n", binding.name);
-                            exit(EXIT_FAILURE);
-                        }
+                        typexprs_equal_or_exit(binding.type, init_type,
+                                "type annotation does not matched "
+                                "deduced type for toplevel binding %s",
+                                binding.name);
                     } else {
                         decl->binding.type = binding.type = init_type;
                         ++types_added;
@@ -948,19 +863,15 @@ static void type_and_check_exhaustively(DeclarationList* root)
                     assert(param->name == it->name);
                     if (it->type) {
                         if (param->type) {
-                            if (!typexpr_equals(it->type, param->type)) {
-                                fprintf(stderr, EPFX"param %s of toplevel "
-                                        "function %s\n", it->name,
-                                        decl->func.name);
-                                print_type_error(it->type, param->type);
-                                exit(EXIT_FAILURE);
-                            }
+                            typexprs_equal_or_exit(it->type, param->type,
+                                    "param %s of toplevel function %s",
+                                    it->name, decl->func.name);
                         } else {
                             if (debug_type_checker) {
-                                printf("typecheck: type of param %s deduced as",
+                                fprintf(stderr, PFX"type of param %s deduced as",
                                         it->name);
-                                print_typexpr(stdout, it->type);
-                                fputs("\n", stdout);
+                                print_typexpr(stderr, it->type);
+                                fputs("\n", stderr);
                             }
                             param->type = it->type;
                             ++types_added;
@@ -984,18 +895,15 @@ static void type_and_check_exhaustively(DeclarationList* root)
                         func_type = typearrow(it->type, func_type);
                     }
                     if (debug_type_checker) {
-                        printf("typecheck: worked out toplevel function %s "
+                        fprintf(stderr, PFX"worked out toplevel function %s "
                                 "has type: ", decl->func.name);
-                        print_typexpr(stdout, func_type);
-                        fputs("\n", stdout);
+                        print_typexpr(stderr, func_type);
+                        fputs("\n", stderr);
                     }
                     if (decl->func.type) {
-                        if (!typexpr_equals(func_type, decl->func.type)) {
-                            fprintf(stderr, EPFX"type of toplevel "
-                                    "function %s\n", decl->func.name);
-                            print_type_error(func_type, decl->func.type);
-                            exit(EXIT_FAILURE);
-                        }
+                        typexprs_equal_or_exit(func_type, decl->func.type,
+                                "type of toplevel function %s",
+                                decl->func.name);
                     } else {
                         decl->func.type = func_type;
                         types_added++;
@@ -1017,23 +925,21 @@ static void type_and_check_exhaustively(DeclarationList* root)
                 for (struct Var* it = saved_stack_ptr; it != var_stack_ptr; ++it) {
                     Declaration* decl = c->declaration;
                     if (it->name == decl_name(decl)) {
-                        printf("** %s\n", it->name);
-                        printf("  stacktype: ");
-                        if (it->type) print_typexpr(stdout, it->type);
-                        else fputs("(null)", stdout);
-                        printf("\n  tree type: ");
+                        fprintf(stderr, "** %s\n", it->name);
+                        fprintf(stderr, "  stacktype: ");
+                        if (it->type) print_typexpr(stderr, it->type);
+                        else fputs("(null)", stderr);
+                        fprintf(stderr, "\n  tree type: ");
                         if (decl_type(decl))
-                            print_typexpr(stdout, decl_type(decl));
-                        else fputs("(null)", stdout);
-                        fputs("\n", stdout);
+                            print_typexpr(stderr, decl_type(decl));
+                        else fputs("(null)", stderr);
+                        fputs("\n", stderr);
                     }
                 }
             }
         }
 
-        if (debug_type_checker) {
-            printf("typecheck: restoring stack pointer\n");
-        }
+        dbgprint("restoring stack pointer\n");
         var_stack_ptr = saved_stack_ptr;
     } while (types_added > 0);
 

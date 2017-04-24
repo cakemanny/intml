@@ -28,15 +28,15 @@ test: tests $(TARGETS)
 
 # The rules below didn't seem to work in mingw32-make
 %.exe: %.ml
-	../intml -o $(basename $<).s $<
+	../../intml -o $(basename $<).s $<
 	as -o $(basename $<).o $(basename $<).s
 	$(LD) $(LDFLAGS) -o $@ $(basename $<).o $(LDLIBS)
 
 %.o: %.s
 	as -o $@ $<
 
-%.s: %.ml ../intml
-	../intml -o $@ $<
+%.s: %.ml ../../intml
+	../../intml -o $@ $<
 
 %: %.o
 	$(LD) $(LDFLAGS) -o $@ $< $(LDLIBS)
