@@ -152,7 +152,8 @@ struct Expr {
 struct TypeExpr {
     enum TypeExprTag {
         TYPE_NAME = 1,
-        TYPE_ARROW
+        TYPE_ARROW,
+        TYPE_CONSTRAINT,
     } tag;
     union {
         Symbol name;
@@ -160,6 +161,7 @@ struct TypeExpr {
             TypeExpr* left;
             TypeExpr* right;
         };
+        int constraint_id;
     };
 };
 
@@ -179,6 +181,16 @@ void print_declaration(FILE* out, const Declaration* decl);
  * Print a type expression tree
  */
 void print_typexpr(FILE*, TypeExpr*);
+
+/*
+ * Write our own printf just to make printing types a bit easier
+ * Only defines, simply %d %s and %T where %T prints a type
+ */
+#define tprintf(out, fmt, ...) tprintfx(out, fmt, tp_count(fmt), ##__VA_ARGS__)
+/* the actual variadic print */
+void tprintfx(FILE* out, const char* fmt, int nargs, ...);
+/* helper for our tprintf macro to count the number of arguments */
+int tp_count(const char* fmt);
 
 /*----------------------------------------*\
  * Some constructors and manipulator fns  *
@@ -300,5 +312,11 @@ TypeExpr* typearrow(TypeExpr* left, TypeExpr* right);
  * e.g. int, unit, float
  */
 TypeExpr* typename(Symbol name);
+
+/*
+ * Creates a contrained but unknown type, these are used by the type checker
+ * to leave holes in the type tree that it can come back and fill in later
+ */
+TypeExpr* typeconstraint(int constraint_id);
 
 #endif // __AST_H__

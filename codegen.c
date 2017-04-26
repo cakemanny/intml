@@ -807,6 +807,7 @@ static size_t stack_size_of_type(TypeExpr* type)
         // fully expand is probably not the answer, since we will want
         // recursive types at some point
         assert(0 && "unknown typename");
+        break;
       }
       case TYPE_ARROW:
       {
@@ -815,6 +816,13 @@ static size_t stack_size_of_type(TypeExpr* type)
            void* closure
          */
         return 2 * WORD_SIZE; // Or I suppose we should add some #defines
+      }
+      case TYPE_CONSTRAINT:
+      {
+          // We should either resolve all constraints or
+          // or not emit code for the function as likely not being used
+          assert(0 && "unresolved type constraint");
+          break;
       }
     }
     abort();

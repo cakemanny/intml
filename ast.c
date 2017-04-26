@@ -1,6 +1,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <assert.h>
 #include "ast.h"
 
@@ -260,6 +261,13 @@ TypeExpr* typename(Symbol name)
     return result;
 }
 
+TypeExpr* typeconstraint(int constraint_id)
+{
+    struct TypeExpr* result = typexpr(TYPE_CONSTRAINT);
+    result->constraint_id = constraint_id;
+    return result;
+}
+
 
 /*----------------------------------------*\
  * Fns for printing the AST               *
@@ -277,6 +285,9 @@ void print_typexpr(FILE* out, TypeExpr* expr)
         fputs(" -> ", out);
         print_typexpr(out, expr->right);
         fputc(')', out);
+        break;
+    case TYPE_CONSTRAINT:
+        fprintf(out, "'%d", expr->constraint_id);
         break;
     }
 }
@@ -330,6 +341,11 @@ void print_expr(FILE* out, const Expr* expr)
         break;
     case FUNC_EXPR:
         fprintf(out, "func %s ", expr->func.name);
+        if (expr->func.functype) {
+            fputs(": ", out);
+            print_typexpr(out, expr->func.functype);
+            fputs(" ", out);
+        }
         print_params(out, expr->func.params);
         fputc(' ', out);
         print_expr(out, expr->func.body);
@@ -385,5 +401,76 @@ void print_tree(FILE* out, const DeclarationList* root)
         prefix = "\n "; // prefix all but first with space
     }
     fputs(")", out);
+}
+
+int tp_count(const char* fmt)
+{
+    int nargs = 0;
+    const char *cp = fmt;
+    char c;
+    while ((c = *cp++)) {
+        if (c == '%') {
+            c = *cp++;
+            switch (c) {
+                case 'd':
+                case 's':
+                case 'T': nargs++;
+                case '%': break;
+                case '\0': --cp; break;
+                default: assert(0 && "need to add another fmt specifier");
+            }
+        }
+    }
+    return nargs;
+}
+
+void tprintfx(FILE* out, const char* fmt, int nargs, ...)
+{
+    const char *cp = fmt;
+    char c;
+
+    va_list valist;
+    va_start(valist, nargs);
+
+    flockfile(out);
+    while ((c = *cp++)) {
+        if (c == '%') {
+            c = *cp++;
+            switch (c) {
+                case 'd':
+                {   // don't bother with negative
+                    int num = va_arg(valist, int);
+                    do {
+                        putc_unlocked('0' + num%10, out);
+                        num /= 10;
+                    } while (num); // use do while to get printing for 0
+                    break;
+                }
+                case 's':
+                {
+                    const char* cs = va_arg(valist, const char*);
+                    while (*cs) { putc_unlocked(*cs++, out); }
+                    break;
+                }
+                case 'T':
+                {
+                    funlockfile(out); // not sure if re-entrant
+                    print_typexpr(out, va_arg(valist, TypeExpr*));
+                    flockfile(out); // not sure if re-entrant
+                    break;
+                }
+                case '%':
+                    putc_unlocked(c, out);
+                    break;
+                case '\0': --cp; break;
+                default: assert(0 && "need to add another fmt specifier");
+            }
+        } else {
+            putc_unlocked(c, out);
+        }
+    }
+    funlockfile(out);
+
+    va_end(valist);
 }
 

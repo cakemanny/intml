@@ -5,6 +5,10 @@
 #include "types_and_vars.h"
 #include <assert.h>
 #include <stdlib.h>
+#include <stdarg.h>
+#ifndef __pure
+#   define __pure __attribute__((pure))
+#endif
 
 #define EPFX    "typecheck: error: "
 #define PFX     "typecheck: "
@@ -18,6 +22,11 @@ int debug_type_checker = 0;
 #define TYPE_NAMES_MAX 1024
 static Type* type_names[TYPE_NAMES_MAX];
 static int type_name_count = 0;
+
+/* A numbering to use for type contraints */
+#define TYPE_CONTRAINTS_MAX 1024
+static int next_constraint_id = 0;
+static TypeExpr* constraint_theories[TYPE_CONTRAINTS_MAX];
 
 /*
  * A stack of variable names that may help us type expressions
@@ -35,6 +44,10 @@ static struct Var* var_stack_ptr = variable_stack;
 /* make life easier printing debug messaged */
 #define dbgprint(M, ...) do { \
     if (debug_type_checker) { fprintf(stderr, PFX M, ##__VA_ARGS__); } \
+} while(0)
+
+#define dbgtprintf(M, ...) do { \
+    if (debug_type_checker) { tprintf(stderr, PFX M, ##__VA_ARGS__); } \
 } while(0)
 
 static TypeExpr* lookup_ornull_typexpr(Symbol name)
@@ -65,7 +78,8 @@ static TypeExpr* deref_typexpr(Symbol name)
         name = dereffed->name;
     }
 }
-static _Bool typexpr_equals(TypeExpr* left, TypeExpr* right)
+
+__pure static _Bool typexpr_equals(TypeExpr* left, TypeExpr* right)
 {
     // deref and names as far as possible, then compare trees
     // normalize input cases
@@ -99,12 +113,26 @@ static _Bool typexpr_equals(TypeExpr* left, TypeExpr* right)
                 return 0;
             return typexpr_equals(dleft, right);
           }
+          case TYPE_CONSTRAINT:
+          {
+            TypeExpr* dleft = deref_typexpr(left->name);
+            if (dleft->name == left->name)
+                return 0;
+            return typexpr_equals(dleft, right);
+          }
         }
       }
-      case TYPE_ARROW: // both type_arrows
+      case TYPE_ARROW: // both type_arrows or right is constraint
       {
+        if (right->tag == TYPE_CONSTRAINT) {
+            return 0; // could conform, but not equal
+        }
         return typexpr_equals(left->left, right->left)
             && typexpr_equals(left->right, right->right);
+      }
+      case TYPE_CONSTRAINT:
+      {
+          return left->constraint_id == right->constraint_id;
       }
     }
     abort(); // Shouldnt be possible
@@ -116,14 +144,14 @@ static TypeExpr* deref_if_needed(TypeExpr* t)
         return deref_typexpr(t->name);
     return t;
 }
-// TODO: finish me!
-_Bool typexpr_conforms_to(TypeExpr* left, TypeExpr* right)
+
+__pure static _Bool typexpr_conforms_to(TypeExpr* left, TypeExpr* right)
 {
     /*
      * probably instead of NULL we should be using a special
      * type tag... or assigning special names
      */
-    if (left == NULL || right == NULL)
+    if (left->tag == TYPE_CONSTRAINT || right->tag == TYPE_CONSTRAINT)
         return 1;
     if (typexpr_equals(left, right))
         return 1;
@@ -138,6 +166,16 @@ _Bool typexpr_conforms_to(TypeExpr* left, TypeExpr* right)
         && typexpr_conforms_to(left->right, right->right);
 }
 
+static TypeExpr* new_type_constraint()
+{
+    if (next_constraint_id >= TYPE_CONTRAINTS_MAX) {
+        // TODO: attempt to reduce in here
+        fprintf(stderr, EPFX"more than %d unconstrained type variables\n",
+                TYPE_CONTRAINTS_MAX);
+        exit(EXIT_FAILURE);
+    }
+    return typeconstraint(next_constraint_id++);
+}
 
 static void add_type_name(Type* node)
 {
@@ -171,12 +209,11 @@ static void push_var(Symbol name, TypeExpr* type)
         exit(EXIT_FAILURE);
     }
     if (debug_type_checker) {
-        fprintf(stderr, PFX"pushing var %s", name);
         if (type) {
-            fprintf(stderr, " : ");
-            print_typexpr(stderr, type);
+            tprintf(stderr, PFX"pushing var %s : %T\n", name, type);
+        } else {
+            fprintf(stderr, PFX"pushing var %s\n", name);
         }
-        fputs("\n", stderr);
     }
     *var_stack_ptr++ = (struct Var) { name, type };
 }
@@ -198,14 +235,211 @@ static struct Var* lookup_var(Symbol name)
 
 static void print_type_error(TypeExpr* expected, TypeExpr* actual)
 {
-    fprintf(stderr, "  expected: ");
-    print_typexpr(stderr, expected);
-
-    fprintf(stderr, "\n  actual: ");
-    print_typexpr(stderr, actual);
-    fputs("\n", stderr);
+    tprintf(stderr, "  expected: %T\n  actual: %T\n", expected, actual);
 }
 
+
+__pure static _Bool solid_type(TypeExpr* type)
+{
+    if (!type)
+        return 0;
+    switch (type->tag) {
+        case TYPE_NAME:
+            return 1;
+        case TYPE_ARROW:
+            return solid_type(type->left) && solid_type(type->right);
+        case TYPE_CONSTRAINT:
+            return 0;
+    }
+    abort();
+}
+
+static _Bool type_uses_constraint(TypeExpr* type, int constraint_id)
+{
+    if (!type)
+        return 0;
+    switch (type->tag)
+    {
+      // the dereffed might, but dereffing will get the new value
+      case TYPE_NAME: return 0;
+      case TYPE_ARROW: return type_uses_constraint(type->left, constraint_id)
+                       || type_uses_constraint(type->right, constraint_id);
+      case TYPE_CONSTRAINT: return type->constraint_id == constraint_id;
+    }
+    abort();
+}
+
+static TypeExpr* replaced_constraint(
+        TypeExpr* toreplace, int constraint_id, TypeExpr* theory)
+{
+    switch (toreplace->tag)
+    {
+      case TYPE_NAME:
+        return toreplace;
+      case TYPE_ARROW:
+        return typearrow(
+                replaced_constraint(toreplace->left, constraint_id, theory),
+                replaced_constraint(toreplace->right, constraint_id, theory));
+      case TYPE_CONSTRAINT:
+        return toreplace->constraint_id == constraint_id ?
+            theory : toreplace;
+    }
+    abort(); // shouln't be possible
+}
+
+/*
+ * Replace the uses of type variables with given constraint_id with theory
+ */
+static void apply_theory_params(ParamList* params, int constraint_id, TypeExpr* theory)
+{
+    for (; params; params = params->next) {
+        Param* p = params->param;
+        if (type_uses_constraint(p->type, constraint_id)) {
+            p->type = replaced_constraint(p->type, constraint_id, theory);
+        }
+    }
+}
+
+/*
+ * Replace the uses of type variables with given constraint_id with theory
+ */
+static void apply_theory_expr(Expr* expr, int constraint_id, TypeExpr* theory)
+{
+    if (type_uses_constraint(expr->type, constraint_id)) {
+        expr->type = replaced_constraint(expr->type, constraint_id, theory);
+    }
+    switch (expr->tag)
+    {
+      case PLUS:
+      case MINUS:
+      case MULTIPLY:
+      case DIVIDE:
+      case EQUAL:
+      case LESSTHAN:
+      case LESSEQUAL:
+      case APPLY:
+        apply_theory_expr(expr->left, constraint_id, theory);
+        apply_theory_expr(expr->right, constraint_id, theory);
+        break;
+      case VAR:
+      case UNITVAL:
+      case INTVAL: // Nothing to do here
+        break;
+      case FUNC_EXPR:
+        // TODO: IF_EXPR
+        apply_theory_params(expr->func.params, constraint_id, theory);
+        apply_theory_expr(expr->func.body, constraint_id, theory);
+        apply_theory_expr(expr->func.subexpr, constraint_id, theory);
+        break;
+      case BIND_EXPR:
+        apply_theory_expr(expr->binding.init, constraint_id, theory);
+        apply_theory_expr(expr->binding.subexpr, constraint_id, theory);
+        break;
+      case IF_EXPR:
+        apply_theory_expr(expr->condition, constraint_id, theory);
+        apply_theory_expr(expr->btrue, constraint_id, theory);
+        apply_theory_expr(expr->bfalse, constraint_id, theory);
+        break;
+    }
+}
+
+/*
+ * Replace the uses of type variables with given constraint_id with theory
+ */
+static void apply_theory(
+        DeclarationList* root, int constraint_id, TypeExpr* theory)
+{
+    for (DeclarationList* c = root; c; c = c->next) {
+        Declaration* decl = c->declaration;
+        switch (decl->tag)
+        {
+          case DECL_TYPE:
+           break;
+          case DECL_BIND:
+          {
+            if (type_uses_constraint(decl->binding.type, constraint_id)) {
+              decl->binding.type = // leak leak leak - potentially
+                  replaced_constraint(decl->binding.type,
+                          constraint_id, theory);
+            }
+            apply_theory_expr(decl->binding.init, constraint_id, theory);
+            break;
+          }
+          case DECL_FUNC:
+          {
+            if (type_uses_constraint(decl->func.type, constraint_id)) {
+              decl->func.type = // leak leak leak
+                  replaced_constraint(decl->func.type,
+                          constraint_id, theory);
+            }
+            apply_theory_params(decl->func.params, constraint_id, theory);
+            apply_theory_expr(decl->func.body, constraint_id, theory);
+            break;
+          }
+        }
+    }
+}
+
+/*
+ * Attempt to add a theory that these types are equal. Which we will later
+ * try to unify
+ */
+static int theorise_equal(TypeExpr* etype, TypeExpr* newtype)
+{
+    switch (etype->tag) {
+      case TYPE_CONSTRAINT:
+      {
+        const int eid = etype->constraint_id;
+        const int nid = etype->constraint_id;
+        // Check whether the theories on this constraint have been updated
+        if (constraint_theories[eid]) {
+            // ignore newtype
+            return 0;
+        } else if (newtype->tag != TYPE_CONSTRAINT) {
+            constraint_theories[eid] = newtype;
+            return 1;
+        } else {
+            assert(newtype->tag == TYPE_CONSTRAINT);
+            if (nid == eid) {
+                return 0;
+            } else if (nid < eid) {
+                constraint_theories[eid] = newtype;
+                return 1;
+            } else {
+                assert(nid > eid);
+                // repoint highest ID to lowest
+                if (constraint_theories[nid]) {
+                    // steal their theory since we don't have one
+                    constraint_theories[eid] = constraint_theories[nid];
+                }
+                // Make us their theory
+                constraint_theories[nid] = etype;
+                return 1;
+            }
+        }
+      }
+      case TYPE_ARROW:
+      {
+        switch (newtype->tag) {
+          case TYPE_ARROW:
+          {
+            return theorise_equal(etype->left, newtype->left)
+                + theorise_equal(etype->right, newtype->right);
+          }
+          case TYPE_NAME:
+          case TYPE_CONSTRAINT:
+            return 0;
+        }
+      }
+      case TYPE_NAME:
+        return 0;
+    }
+    abort(); // shouln't be possible
+}
+
+/*
+ * Use type information from one part of the tree to inflict it on the other
+ */
 static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
 {
     switch (expr->tag) {
@@ -229,12 +463,11 @@ static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
         // Want left and right of (f x) such  that
         // f : 'a -> 'b , x : 'a
         if (expr->right->type) {
-            if (!expr->left->type) {
-                newtype = typearrow(newtype, expr->right->type);
+            if (!solid_type(expr->left->type)) {
+                newtype = typearrow(expr->right->type, newtype);
                 if (debug_type_checker) {
-                    fprintf(stderr, PFX"updating imposing type to ");
-                    print_typexpr(stderr, newtype);
-                    fprintf(stderr, " for left side of apply\n");
+                    tprintf(stderr, PFX"updating imposing type to %T for "
+                            "left side of apply\n", newtype);
                 }
                 return imposetypeon_expr(expr->left, newtype);
             }
@@ -245,14 +478,14 @@ static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
       {
         if (!expr->type) {
             if (debug_type_checker) {
-                fprintf(stderr, PFX"imposing type ");
-                print_typexpr(stderr, newtype);
-                fprintf(stderr, " on free variable %s\n", expr->var);
+                tprintf(stderr, PFX"imposing type %T on free variable %s\n",
+                        newtype, expr->var);
             }
             expr->type = newtype;
             return 1;
+        } else {
+            return theorise_equal(expr->type, newtype);
         }
-        return 0;
       }
       case UNITVAL:
       {
@@ -282,7 +515,8 @@ static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
     abort();
 }
 
-static const char * expr_name(enum ExprTag tag)
+__attribute__((const))
+static const char* expr_name(enum ExprTag tag)
 {
     assert(tag != 0);
     assert(tag <= IF_EXPR);
@@ -295,10 +529,10 @@ static const char * expr_name(enum ExprTag tag)
     return expr_name[tag];
 }
 
-#define typexprs_equal_or_exit(ET,AT,M,...) do {                \
+#define typexpr_conforms_or_exit(ET,AT,M,...) do {              \
             TypeExpr* __et = (ET);                              \
             TypeExpr* __at = (AT);                              \
-            if (!typexpr_equals(__et, __at)) {                  \
+            if (!typexpr_conforms_to(__et, __at)) {             \
                 fprintf(stderr, EPFX M "\n", ##__VA_ARGS__);    \
                 print_type_error(__et, __at);                   \
                 exit(EXIT_FAILURE);                             \
@@ -335,16 +569,15 @@ static int deducetype_expr(Expr* expr)
         TypeExpr* left_type = expr->left->type;
         TypeExpr* right_type = expr->right->type;
 
-
-        if (left_type) {
-            typexprs_equal_or_exit(int_type, left_type,
+        if (solid_type(left_type)) {
+            typexpr_conforms_or_exit(int_type, left_type,
                     "left side of %s expression", expr_name(expr->tag));
         } else {
             // Come back and impose types on free variables
             types_added += imposetypeon_expr(expr->left, int_type);
         }
-        if (right_type) {
-            typexprs_equal_or_exit(int_type, right_type,
+        if (solid_type(right_type)) {
+            typexpr_conforms_or_exit(int_type, right_type,
                     "right side of %s expression", expr_name(expr->tag));
         } else {
             // Come back and impose types on free variables
@@ -352,7 +585,7 @@ static int deducetype_expr(Expr* expr)
         }
         // type should be int
         if (expr->type) {
-            typexprs_equal_or_exit(int_type, expr->type,
+            typexpr_conforms_or_exit(int_type, expr->type,
                     "%s expression", expr_name(expr->tag));
         } else {
             expr->type = int_type;
@@ -369,29 +602,42 @@ static int deducetype_expr(Expr* expr)
 
         if (left_type && right_type) {
             // compare!
-            typexprs_equal_or_exit(left_type, right_type, "right right of "
+            typexpr_conforms_or_exit(left_type, right_type, "right right of "
                     "equals expression does not match left side");
+            // TODO: check if unconstrained
+            if (solid_type(left_type) && solid_type(right_type)) {
+                // do nothing
+            } else if (solid_type(left_type)) {
+                types_added += imposetypeon_expr(expr->right, left_type);
+            } else if (solid_type(right_type)) {
+                types_added += imposetypeon_expr(expr->left, right_type);
+            } else {
+                // Both wooly. get them to talk? i.e.
+                types_added += imposetypeon_expr(expr->right, left_type)
+                    + imposetypeon_expr(expr->left, expr->right->type);
+            }
         } else if (left_type) {
             expr->right->type = left_type;
             types_added++;
             types_added += imposetypeon_expr(expr->right, left_type);
         } else if (right_type) {
-            expr->left->type = left_type;
+            expr->left->type = right_type;
             types_added++;
             types_added += imposetypeon_expr(expr->left, right_type);
         } else {
             dbgprint("unable to work out type of either "
                     "side of equals expression\n");
-            // TODO: assign same type variable to each side
+            // assign same type variable to each side
+            TypeExpr* newtype = new_type_constraint();
+            expr->left->type = newtype;
+            expr->right->type = newtype;
         }
 
         if (expr->type) {
-            typexprs_equal_or_exit(int_type, expr->type, "equals expression");
+            typexpr_conforms_or_exit(int_type, expr->type, "equals expression");
         } else {
-            if (left_type) {
-                expr->type = int_type;
-                types_added++;
-            }
+            expr->type = int_type; // result of comparison is int
+            types_added++;
         }
         return types_added;
       }
@@ -409,18 +655,17 @@ static int deducetype_expr(Expr* expr)
                 if (deref_typexpr(left_type->name)->tag == TYPE_ARROW) {
                     left_type = deref_typexpr(left_type->name);
                 } else {
-                    fprintf(stderr, EPFX"left side of apply expression "
-                            "must be a function\n  expected: ");
-                    print_typexpr(stderr, right_type);
-                    fprintf(stderr, " -> 'b\n  actual: ");
-                    print_typexpr(stderr, left_type);
-                    fputs("\n", stderr);
+                    tprintf(stderr, EPFX"left side of apply expression "
+                            "must be a function\n  expected: %T -> 'b\n "
+                            "  actual: %T\n", right_type, left_type);
                     exit(EXIT_FAILURE);
                 }
             }
             if (right_type) {
-                typexprs_equal_or_exit(left_type->left, right_type,
+                typexpr_conforms_or_exit(left_type->left, right_type,
                         "right side of apply expression");
+                dbgtprintf("left type: %T, right type %T\n", left_type,
+                        right_type);
             } else {
                 // impose left on right
                 expr->right->type = left_type->left;
@@ -428,18 +673,22 @@ static int deducetype_expr(Expr* expr)
             }
         } else if (right_type) {
             // impose right on left?
-            if (debug_type_checker) {
-                fprintf(stderr, PFX"need parent to work out type of function ");
-                print_typexpr(stderr, right_type);
-                fprintf(stderr, " -> 'b\n");
-            }
+            TypeExpr* fresult_type = new_type_constraint();
+            expr->left->type = typearrow(right_type, fresult_type);
+            types_added++;
+            dbgtprintf("assign type variable to result of function %T\n",
+                    expr->left->type);
         } else {
             dbgprint("no idea how to work out type of apply expression\n");
+            TypeExpr* a = new_type_constraint();
+            TypeExpr* b = new_type_constraint();
+            expr->left->type = typearrow(a, b);
+            expr->right->type = b;
         }
 
         if (expr->type) {
             if (left_type) {
-                typexprs_equal_or_exit(left_type->right, expr->type,
+                typexpr_conforms_or_exit(left_type->right, expr->type,
                         "type of apply expression does not match result "
                         "type of function on left");
             }
@@ -447,7 +696,7 @@ static int deducetype_expr(Expr* expr)
                 // we can work out the type of the function
                 TypeExpr* inferred_type = typearrow(expr->right->type, expr->type);
                 if (expr->left->type) {
-                    typexprs_equal_or_exit(expr->left->type, inferred_type,
+                    typexpr_conforms_or_exit(expr->left->type, inferred_type,
                             "type of (RHS -> apply expr) does not match "
                             "the function type");
                     free((void*)inferred_type);
@@ -472,11 +721,26 @@ static int deducetype_expr(Expr* expr)
         TypeExpr* found_type = found_var->type;
         if (expr->type) {
             if (found_type) {
-                typexprs_equal_or_exit(found_type, expr->type,
+                typexpr_conforms_or_exit(found_type, expr->type,
                         "var expression type did not match previously "
                         "known type for %s", expr->var);
+                if (solid_type(expr->type) && solid_type(found_type)) {
+                    dbgtprintf("both use and declaration of %s have type: %T\n",
+                            expr->var, found_type);
+                } else if (solid_type(expr->type)) {
+                    dbgtprintf("use of %s has type %T, decl has type %T\n",
+                            expr->var, expr->type, found_type);
+                } else if (solid_type(found_type)) {
+                    dbgtprintf("use of %s has type %T, decl has type %T\n",
+                            expr->var, expr->type, found_type);
+                    return imposetypeon_expr(expr, found_type);
+                } else {
+                    dbgtprintf("declaration but not use of %s have type: %T\n",
+                            expr->var, found_type);
+                }
             } else {
-                dbgprint("infering var %s type from expression\n", expr->var);
+                dbgtprintf("infering var %s type from expression: %T\n",
+                        expr->var, expr->type);
                 found_var->type = found_type = expr->type;
             }
             return 0;
@@ -550,16 +814,12 @@ static int deducetype_expr(Expr* expr)
                     if (it->type) {
                         if (param->type) {
                             // compare
-                            typexprs_equal_or_exit(it->type, param->type,
+                            typexpr_conforms_or_exit(it->type, param->type,
                                     "param %s of function %s",
                                     it->name, expr->func.name);
                         } else {
-                            if (debug_type_checker) {
-                                fprintf(stderr, PFX"type of param %s deduced "
-                                        "as ", it->name);
-                                print_typexpr(stderr, it->type);
-                                fputs("\n", stderr);
-                            }
+                            dbgtprintf("type of param %s deduced as %T\n",
+                                    it->name, it->type);
                             param->type = it->type;
                             ++types_added;
                         }
@@ -592,14 +852,11 @@ static int deducetype_expr(Expr* expr)
             {
                 func_type = typearrow(it->type, func_type);
             }
-            if (debug_type_checker) {
-                fprintf(stderr, PFX"worked out func %s has type: ", expr->func.name);
-                print_typexpr(stderr, func_type);
-                fputs("\n", stderr);
-            }
+            dbgtprintf("worked out func %s has type: %T\n", expr->func.name,
+                    func_type);
 
             if (expr->func.functype) {
-                typexprs_equal_or_exit(func_type, expr->func.functype,
+                typexpr_conforms_or_exit(func_type, expr->func.functype,
                         "type of function %s", expr->func.name);
             } else {
                 expr->func.functype = func_type;
@@ -617,7 +874,7 @@ static int deducetype_expr(Expr* expr)
 
         if (expr->type) {
             if (subexprtype) {
-                typexprs_equal_or_exit(subexprtype, expr->type,
+                typexpr_conforms_or_exit(subexprtype, expr->type,
                         "recorded type of expression following %s "
                         "definition", expr->func.name);
             } else {
@@ -636,13 +893,10 @@ static int deducetype_expr(Expr* expr)
          * function was inferred from the subexpr
          */
         // TODO: do something useful with this
-        if (debug_type_checker) {
-            if (!func_type && pre_param_stack_ptr->type) {
-                fprintf(stderr, PFX"funcvar %s now has type: ",
-                        pre_param_stack_ptr->name);
-                print_typexpr(stderr, pre_param_stack_ptr->type);
-                fputs("\n", stderr);
-            }
+        if (!func_type && pre_param_stack_ptr->type) {
+            dbgtprintf("funcvar %s now has type: %T\n",
+                    pre_param_stack_ptr->name, pre_param_stack_ptr->type);
+            // or do we need to loop over params
         }
 
         var_stack_ptr = pre_param_stack_ptr;
@@ -657,11 +911,8 @@ static int deducetype_expr(Expr* expr)
         int types_added = deducetype_expr(expr->binding.init);
         TypeExpr* init_type = expr->binding.init->type;
         if (init_type) {
-            if (debug_type_checker) {
-                fprintf(stderr, PFX"deduced type for %s as ", expr->binding.name);
-                print_typexpr(stderr, init_type);
-                fputs("\n", stderr);
-            }
+            dbgtprintf("deduced type for %s as %T\n", expr->binding.name,
+                    init_type);
         }
 
         struct Var* saved_stack_ptr = var_stack_ptr;
@@ -672,7 +923,7 @@ static int deducetype_expr(Expr* expr)
 
         if (expr->type) {
             if (subexprtype) {
-                typexprs_equal_or_exit(subexprtype, expr->type,
+                typexpr_conforms_or_exit(subexprtype, expr->type,
                         "conflicting types for expression following "
                         "binding of %s ", expr->binding.name);
             } else {
@@ -687,12 +938,9 @@ static int deducetype_expr(Expr* expr)
         }
 
         if (!init_type && saved_stack_ptr->type) {
-            if (debug_type_checker) {
-                fprintf(stderr, PFX"the type of %s was deduced by it's use "
-                        "in the subseqent subexpression: ", expr->binding.name);
-                print_typexpr(stderr, saved_stack_ptr->type);
-                fputs("\n", stderr);
-            }
+            dbgtprintf("the type of %s was deduced by it's use in the "
+                    "subseqent subexpression: %T\n", expr->binding.name,
+                    saved_stack_ptr->type);
             expr->binding.init->type = saved_stack_ptr->type;
             types_added++;
         }
@@ -709,7 +957,7 @@ static int deducetype_expr(Expr* expr)
 
         // start by enforce int_type on the condition
         if (expr->condition->type) {
-            typexprs_equal_or_exit(int_type, expr->condition->type,
+            typexpr_conforms_or_exit(int_type, expr->condition->type,
                     "condition of if expression");
         } else {
             types_added += imposetypeon_expr(expr->condition, int_type);
@@ -720,7 +968,7 @@ static int deducetype_expr(Expr* expr)
 
         if (true_type && false_type) {
             // compare!
-            typexprs_equal_or_exit(true_type, false_type, "true and false "
+            typexpr_conforms_or_exit(true_type, false_type, "true and false "
                     "branches of if expression with different types");
         } else if (true_type) {
             expr->bfalse->type = true_type;
@@ -736,7 +984,7 @@ static int deducetype_expr(Expr* expr)
         }
 
         if (expr->type) {
-            typexprs_equal_or_exit(int_type, expr->type, "if expression");
+            typexpr_conforms_or_exit(int_type, expr->type, "if expression");
         } else {
             if (true_type) {
                 expr->type = int_type;
@@ -750,9 +998,9 @@ static int deducetype_expr(Expr* expr)
 }
 
 /*
- * A helper function for accessing the name of any of the declration types
+ * A helper function for accessing the name of any of the declaration types
  */
-static Symbol decl_name(Declaration* declaration)
+__pure static Symbol decl_name(Declaration* declaration)
 {
     switch (declaration->tag) {
         case DECL_FUNC: return declaration->func.name;
@@ -804,23 +1052,30 @@ static void type_and_check_exhaustively(DeclarationList* root)
                 types_added += deducetype_expr(binding.init);
                 TypeExpr* init_type = binding.init->type;
 
-                if (debug_type_checker) {
-                    if (init_type) {
-                        fprintf(stderr, PFX"deduced type ");
-                        print_typexpr(stderr, init_type);
-                        fputs("\n", stderr);
-                    } else {
-                        fprintf(stderr, PFX"unable to deduce type for "
-                                "top level binding %s\n", binding.name);
-                    }
+                if (init_type) {
+                    dbgtprintf("deduced type %T\n", init_type);
+                } else {
+                    dbgprint("unable to deduce type for top level binding %s\n",
+                            binding.name);
                 }
 
                 if (init_type) {
                     if (binding.type) {
-                        typexprs_equal_or_exit(binding.type, init_type,
+                        typexpr_conforms_or_exit(binding.type, init_type,
                                 "type annotation does not matched "
                                 "deduced type for toplevel binding %s",
                                 binding.name);
+                        if (solid_type(init_type) && solid_type(binding.type)) {
+                            // Do nothing - they must equal
+                        } else if (solid_type(init_type)) {
+                            binding.type = init_type;
+                            types_added++;
+                        } else if (solid_type(binding.type)) {
+                            types_added += imposetypeon_expr(binding.init, binding.type);
+                        } else {
+                            // Maybe they can talk to each other a bit?
+                            types_added += imposetypeon_expr(binding.init, binding.type);
+                        }
                     } else {
                         decl->binding.type = binding.type = init_type;
                         ++types_added;
@@ -863,16 +1118,12 @@ static void type_and_check_exhaustively(DeclarationList* root)
                     assert(param->name == it->name);
                     if (it->type) {
                         if (param->type) {
-                            typexprs_equal_or_exit(it->type, param->type,
+                            typexpr_conforms_or_exit(it->type, param->type,
                                     "param %s of toplevel function %s",
                                     it->name, decl->func.name);
                         } else {
-                            if (debug_type_checker) {
-                                fprintf(stderr, PFX"type of param %s deduced as",
-                                        it->name);
-                                print_typexpr(stderr, it->type);
-                                fputs("\n", stderr);
-                            }
+                            dbgtprintf("type of param %s deduced as %T\n",
+                                    it->name, it->type);
                             param->type = it->type;
                             ++types_added;
                         }
@@ -894,19 +1145,35 @@ static void type_and_check_exhaustively(DeclarationList* root)
                     {
                         func_type = typearrow(it->type, func_type);
                     }
-                    if (debug_type_checker) {
-                        fprintf(stderr, PFX"worked out toplevel function %s "
-                                "has type: ", decl->func.name);
-                        print_typexpr(stderr, func_type);
-                        fputs("\n", stderr);
-                    }
+                    dbgtprintf("worked out toplevel function %s has type: %T\n",
+                            decl->func.name, func_type);
+
                     if (decl->func.type) {
-                        typexprs_equal_or_exit(func_type, decl->func.type,
+                        typexpr_conforms_or_exit(func_type, decl->func.type,
                                 "type of toplevel function %s",
                                 decl->func.name);
+                        if (!solid_type(decl->func.type)) {
+                            // FIXME: should really write an impose statement
+                            // AND need to get theories filled in
+                            if (solid_type(func_type)) {
+                                decl->func.type = func_type;
+                            }
+                        }
                     } else {
                         decl->func.type = func_type;
                         types_added++;
+                    }
+                    // TODO: ADD THIS TO FUNC_EXPR
+                } else if (decl->func.type) {
+                    // TODO: finish this
+                    // With our type var idea, we should do separate cases
+                    // for have_type_of_params and for have bodytype
+                    if (!decl->func.params->param->type) {
+                        if (decl->func.type->left) {
+                            decl->func.params->param->type
+                                = decl->func.type->left;
+                            types_added++;
+                        }
                     }
                 }
 
@@ -934,8 +1201,55 @@ static void type_and_check_exhaustively(DeclarationList* root)
                             print_typexpr(stderr, decl_type(decl));
                         else fputs("(null)", stderr);
                         fputs("\n", stderr);
+
+                        if (it->type && !decl_type(decl)) {
+                            switch (decl->tag) {
+                                case DECL_FUNC:
+                                    decl->func.type = it->type;
+                                    break;
+                                case DECL_BIND:
+                                    decl->binding.type = it->type;
+                                    break;
+                                case DECL_TYPE:
+                                    assert(0 && "type declaration without type");
+                                    break;
+                            }
+                        }
                     }
                 }
+            }
+        }
+
+        /*
+         * since we write all our transitive theories such that
+         * 'i ~ 'j => i > j, must start from highest theory
+         */
+        for (int i = next_constraint_id - 1; i >= 0; --i) {
+            if (constraint_theories[i]) {
+                dbgtprintf("constraint %d has theory %T\n", i,
+                        constraint_theories[i]);
+                // Want to apply said theory to the tree and then type check it
+                apply_theory(root, i, constraint_theories[i]);
+                ++types_added; // avoid loop end
+
+                /*
+                 * In the future, for the purpose of error messages, we
+                 * ought to state the current theory we are testing and show
+                 * where it came from...
+                 */
+
+                if (i == next_constraint_id - 1) {
+                    // Don't want "freed" constraints to be seen by new
+                    // theories
+                    constraint_theories[i] = NULL;
+                    --next_constraint_id;
+                } else {
+                    // Perform compaction?
+                    constraint_theories[i] = NULL;
+                }
+                break;
+            } else {
+                dbgprint("constraint %d has no theories yet\n", i);
             }
         }
 
@@ -957,7 +1271,7 @@ static _Bool check_if_fully_typed_params(ParamList* params, SymList* hierachy)
     _Bool result = 1;
     for (ParamList* c = params; c; c = c->next) {
         if (!c->param->type) {
-            fprintf(stderr, EPFX"unabled to determine type of parameter %s\n",
+            fprintf(stderr, EPFX"unable to determine type of parameter %s\n",
                     c->param->name);
             print_binding_hierachy(stderr, hierachy);
             result = 0;
