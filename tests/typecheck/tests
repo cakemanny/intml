@@ -42,6 +42,11 @@ expect_pass "let f x = x * 2"
 # And iteratively allow that function to impose it's type on another
 expect_pass "let f x = x * 49   let g x = f x"
 
+# functions of two variables
+expect_pass "let f x y = x + y"
+# functions of three
+expect_pass "let f x y z = x + y + z"
+
 # ints are not functions
 expect_fail "let f (x:int) = x x"
 
