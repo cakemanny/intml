@@ -49,7 +49,7 @@ static DeclarationList* tree = NULL;
 %type <declaration> declaration letdecl typedecl
 %type <params> params
 %type <param> param
-%type <exprs> exprlist
+%type <exprs> exprlist nonemptylist
 %type <expr> expr letexpr exprterm
 %type <typexpr> typexpr typeterm
 
@@ -64,7 +64,9 @@ static DeclarationList* tree = NULL;
 %right CONS
 %left '+' '-'
 %left '*' '/'
-%left ID UNIT INT '('  /* function application */
+%left ID UNIT INT STR_LIT '('  /* function application -note, typecheck will
+                                  stop strings and ints being functions, rather
+                                  than the grammar */
 
 %%
 
@@ -131,7 +133,11 @@ letexpr:
   ;
 exprlist:
     /* empty */             { $$ = exprlist(); }
-  | expr ';' exprlist       { $$ = add_expr($3, $1); }
+  | nonemptylist            { $$ = $1; }
+  ;
+nonemptylist:
+    expr                    { $$ = add_expr(exprlist(), $1); }
+  | expr ';' nonemptylist   { $$ = add_expr($3, $1); }
   ;
 typedecl:
     TYPE ID '=' typexpr     { $$ = type($2, $4); }

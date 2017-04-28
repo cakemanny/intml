@@ -104,8 +104,6 @@ else            { return ELSE; }
 {WS}            ; /* Drop whitespace */
 [\n]            { ++yylineno; }
 
-<<EOF>>         { return EOFTOK; }
-
 .               { yylval.error_msg = strdup(yytext); return ERROR; }
 
 

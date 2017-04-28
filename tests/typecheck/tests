@@ -49,6 +49,9 @@ expect_pass "let f x y z = x + y + z"
 
 # ints are not functions
 expect_fail "let f (x:int) = x x"
+expect_fail "let y = 1 1"
+# strings are not functions
+expect_fail 'let y = "ho" "ho"'
 
 # some fun with functions
 expect_pass "let apply (f:int -> int) x = f x"
