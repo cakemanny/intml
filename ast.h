@@ -124,6 +124,7 @@ struct Expr {
         VAR,
         UNITVAL,
         INTVAL,
+        STRVAL,
         FUNC_EXPR,
         BIND_EXPR,
         IF_EXPR,
@@ -142,6 +143,7 @@ struct Expr {
             int     function_id; // tag function that closes the variable
         };
         int         intval;     /* INTVAL */
+        Symbol      strval;     /* STRVAL */
         FuncExpr    func;       /* FUNC_EXPR */
         BindExpr    binding;    /* BIND_EXPR */
         struct { /* IF_EXPR */
@@ -300,6 +302,11 @@ Expr* unit_expr();
  * Creates an expression node holding a literal int
  */
 Expr* intval(int value);
+
+/*
+ * Create a string expression node
+ */
+Expr* strval(Symbol text);
 
 /*
  * Creates a local function binding and subexpression node which uses

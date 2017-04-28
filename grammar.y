@@ -96,6 +96,7 @@ param:
 expr:
     letexpr                     { $$ = $1; }
   | IF expr THEN expr ELSE expr { $$ = ifexpr($2,$4,$6); }
+  /* TODO add '^' string concatenation */
   | expr '+' expr               { $$ = plus($1, $3); }
   | expr '-' expr               { $$ = minus($1, $3); }
   | expr '*' expr               { $$ = multiply($1, $3); }
@@ -116,6 +117,7 @@ exprterm:
   | ID                          { $$ = var($1); }
   | UNIT                        { $$ = unit_expr(); }
   | INT                         { $$ = intval($1); }
+  | STR_LIT                     { $$ = strval($1); }
   ;
 letexpr:
     LET ID params '=' expr IN expr

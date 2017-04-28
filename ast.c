@@ -203,6 +203,13 @@ Expr* intval(int value)
     return result;
 }
 
+Expr* strval(Symbol text)
+{
+    Expr* result = expr(STRVAL);
+    result->strval = text;
+    return result;
+}
+
 Expr* local_func(Symbol name, ParamList* params, Expr* body, Expr* subexpr)
 {
     Expr* result = expr(FUNC_EXPR);
@@ -425,6 +432,9 @@ void print_expr(FILE* out, const Expr* expr)
         break;
     case INTVAL:
         fprintf(out, "int %d", expr->intval);
+        break;
+    case STRVAL:
+        fprintf(out, "string \"%s\"", expr->strval);
         break;
     case FUNC_EXPR:
         fprintf(out, "func %s ", expr->func.name);

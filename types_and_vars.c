@@ -524,7 +524,7 @@ static const char* expr_name(enum ExprTag tag)
         "", "plus", "minus", "multiply", "divide",
         "equal",
         "less than", "less than or equal",
-        "apply", "var", "unit", "int", "func", "let", "if"
+        "apply", "var", "unit", "int", "string", "func", "let", "if"
     };
     return expr_name[tag];
 }
@@ -553,6 +553,7 @@ static int deducetype_expr(Expr* expr)
 {
     TypeExpr* int_type = lookup_typexpr(symbol("int"));
     TypeExpr* unit_type = lookup_typexpr(symbol("unit"));
+    TypeExpr* string_type = lookup_typexpr(symbol("string"));
 
     dbgprint("deduce type of %s expression\n", expr_name(expr->tag));
 
@@ -798,6 +799,15 @@ static int deducetype_expr(Expr* expr)
             return 1;
         }
         assert(typexpr_equals(int_type, expr->type));
+        return 0;
+      }
+      case STRVAL:
+      {
+        if (!expr->type) {
+            expr->type = string_type;
+            return 1;
+        }
+        assert(typexpr_equals(string_type, expr->type));
         return 0;
       }
       case FUNC_EXPR:
@@ -1375,6 +1385,7 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
         break;
       case UNITVAL:
       case INTVAL:
+      case STRVAL:
         assert(expr->type != NULL); // should damn well be typed
         break;
       case FUNC_EXPR:
@@ -1473,6 +1484,7 @@ void type_check_tree(DeclarationList* root)
 
     add_builtin_type("int");
     add_builtin_type("unit");
+    add_builtin_type("string");
 
     type_and_check_exhaustively(root);
 

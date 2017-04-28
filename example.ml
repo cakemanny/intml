@@ -24,6 +24,10 @@ let deduce = infer 10
 
 let x = fst [ 1 ; 2; ]
 
+let len_of_it = "
+  string length
+"
+
 let main () =
     f 2 + f 25
 
