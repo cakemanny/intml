@@ -15,6 +15,7 @@ struct Param;
 struct Expr;
 struct FuncExpr;
 struct BindExpr;
+struct ExprList;
 struct TypeExpr;
 
 // typedef everything to make it all nicer to read and type
@@ -28,6 +29,7 @@ typedef struct Param Param;
 typedef struct Expr Expr;
 typedef struct FuncExpr FuncExpr;
 typedef struct BindExpr BindExpr;
+typedef struct ExprList ExprList;
 typedef const struct TypeExpr TypeExpr; // can use "struct TypeExpr" for mutable version in constructors
 
 /* define our tree */
@@ -125,6 +127,9 @@ struct Expr {
         FUNC_EXPR,
         BIND_EXPR,
         IF_EXPR,
+        LIST,
+        VECTOR,
+        TUPLE,
     }               tag;
     union {
         struct { /* PLUS - APPLY */
@@ -144,9 +149,15 @@ struct Expr {
             Expr*   btrue;      // true branch
             Expr*   bfalse;     // false branch
         };
+        ExprList* expr_list; /* LIST, VECTOR, TUPLE */
     };
     /* We will want to be able to type all our expressions */
     TypeExpr*       type;
+};
+
+struct ExprList {
+    Expr* expr;
+    ExprList* next;
 };
 
 struct TypeExpr {
@@ -154,14 +165,20 @@ struct TypeExpr {
         TYPE_NAME = 1,
         TYPE_ARROW,
         TYPE_CONSTRAINT,
+        TYPE_TUPLE,
+        TYPE_CONSTRUCTOR,
     } tag;
     union {
         Symbol name;
-        struct {
+        struct { /* typearrow, type_tuple */
             TypeExpr* left;
             TypeExpr* right;
         };
         int constraint_id;
+        struct {
+            TypeExpr* param;
+            Symbol constructor;
+        };
     };
 };
 
@@ -302,6 +319,37 @@ Expr* local_binding(Symbol name, Expr* init, Expr* subexpr);
 Expr* ifexpr(Expr* condition, Expr* btrue, Expr* bfalse);
 
 /*
+ * Creates a list expression from the given expression list
+ */
+Expr* list(ExprList* exprs);
+
+/*
+ * Creates a vector expression of the given expression list
+ */
+Expr* vector(ExprList* exprs);
+
+/*
+ * Creates a tuple expression
+ */
+Expr* tuple(ExprList* exprs);
+
+/*
+ * Creates an empty list of expressions (used in compund expressions like lists 
+ * and vectors
+ */
+ExprList* exprlist();
+
+/*
+ * Returns a new list with to_add as the head and list as the tail
+ */
+ExprList* add_expr(ExprList* list, Expr* to_add);
+
+/*
+ * Returns the same list, reversed
+ */
+ExprList* reverse_list(ExprList* list);
+
+/*
  * Creates a function type expression
  * 'a -> 'b
  */
@@ -318,5 +366,16 @@ TypeExpr* typename(Symbol name);
  * to leave holes in the type tree that it can come back and fill in later
  */
 TypeExpr* typeconstraint(int constraint_id);
+
+/*
+ * Creates a type tuple
+ */
+TypeExpr* typetuple(TypeExpr* left, TypeExpr* right);
+
+/*
+ * Creates a constructed type where constrname is a type constructor
+ * e.g. int list or string list
+ */
+TypeExpr* typeconstructor(TypeExpr* param, Symbol constrname);
 
 #endif // __AST_H__

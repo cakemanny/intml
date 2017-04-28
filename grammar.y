@@ -24,6 +24,7 @@ static DeclarationList* tree = NULL;
     DeclarationList*    declarations;
     Declaration*        declaration;
     Expr*               expr;
+    ExprList*           exprs;
     ParamList*          params;
     Param*              param;
     TypeExpr*           typexpr;
@@ -32,26 +33,35 @@ static DeclarationList* tree = NULL;
     int                 intval;     // we should probably store these
                                     // as strings/symbols as well...
     Symbol              identifier;
+    Symbol              text;
+    const char*         error_msg;
 }
 
 %token LET TYPE IN IF THEN ELSE
 %token UNIT
 %token <intval> INT
+%token <text>   STR_LIT
 %token <identifier> ID
 %token <error> ERROR
+%token EOFTOK
 
 %type <declarations> program declarations
 %type <declaration> declaration letdecl typedecl
 %type <params> params
 %type <param> param
+%type <exprs> exprlist
 %type <expr> expr letexpr exprterm
 %type <typexpr> typexpr typeterm
 
 %nonassoc LET IN   /* These are to make let bindings stick to top level if poss */
 %right ARROW    /* function typexprs */
+%nonassoc '[' ']' VSTART VEND
+%right ';'
 %nonassoc IF THEN ELSE
 %left '='       /* right in assignments but left in expressions */
+%nonassoc ','
 %nonassoc '<' LE
+%right CONS
 %left '+' '-'
 %left '*' '/'
 %left ID UNIT INT '('  /* function application */
@@ -79,30 +89,33 @@ params:
   | param                       { $$ = param_list($1); }
   ;
 param:
-    ID                      { $$ = param($1); }
-  | '(' ID ':' typexpr ')'  { $$ = param_with_type($2, $4); }
-  | UNIT                    { $$ = param(symbol("()")); }
+    ID                          { $$ = param($1); }
+  | '(' ID ':' typexpr ')'      { $$ = param_with_type($2, $4); }
+  | UNIT                        { $$ = param(symbol("()")); }
   ;
 expr:
-    letexpr             { $$ = $1; }
-  | IF expr THEN expr ELSE expr     { $$ = ifexpr($2,$4,$6); }
-  | expr '+' expr       { $$ = plus($1, $3); }
-  | expr '-' expr       { $$ = minus($1, $3); }
-  | expr '*' expr       { $$ = multiply($1, $3); }
-  | expr '/' expr       { $$ = divide($1, $3); }
-  | expr '=' expr       { $$ = equal($1, $3); }
-  | expr '<' expr       { $$ = lessthan($1, $3); }
-  | expr LE expr        { $$ = lessequal($1, $3); }
+    letexpr                     { $$ = $1; }
+  | IF expr THEN expr ELSE expr { $$ = ifexpr($2,$4,$6); }
+  | expr '+' expr               { $$ = plus($1, $3); }
+  | expr '-' expr               { $$ = minus($1, $3); }
+  | expr '*' expr               { $$ = multiply($1, $3); }
+  | expr '/' expr               { $$ = divide($1, $3); }
+  | expr '=' expr               { $$ = equal($1, $3); }
+  | expr '<' expr               { $$ = lessthan($1, $3); }
+  | expr LE expr                { $$ = lessequal($1, $3); }
     /* in real ML this should be "expr expr" */
     /* but we need to disambiguate */
-  | expr exprterm       { $$ = apply($1, $2); }
-  | exprterm            { $$ = $1; }
+  | expr exprterm               { $$ = apply($1, $2); }
+  | exprterm                    { $$ = $1; }
   ;
 exprterm:
-    '(' expr ')'        { $$ = $2; }
-  | ID                  { $$ = var($1); }
-  | UNIT                { $$ = unit_expr(); }
-  | INT                 { $$ = intval($1); }
+    '(' expr ')'                { $$ = $2; }
+  | '(' expr ':' typexpr ')'    { $$ = $2; $2->type = $4; }
+  | '[' exprlist ']'            { $$ = list($2); }
+  | VSTART exprlist VEND        { $$ = vector($2); }
+  | ID                          { $$ = var($1); }
+  | UNIT                        { $$ = unit_expr(); }
+  | INT                         { $$ = intval($1); }
   ;
 letexpr:
     LET ID params '=' expr IN expr
@@ -114,6 +127,10 @@ letexpr:
       $$ = local_binding($2, $4, $6);
     }
   ;
+exprlist:
+    /* empty */             { $$ = exprlist(); }
+  | expr ';' exprlist       { $$ = add_expr($3, $1); }
+  ;
 typedecl:
     TYPE ID '=' typexpr     { $$ = type($2, $4); }
   ;
@@ -122,6 +139,8 @@ typexpr:
      * clear up ambiguities in the grammar
      */
     typeterm ARROW typexpr  { $$ = typearrow($1, $3); }
+  | typeterm '*' typexpr    { $$ = typetuple($1, $3);  }
+  | typexpr ID              { $$ = typeconstructor($1, $2); }
   | typeterm                { $$ = $1; }
 typeterm:
     '(' typexpr ')'         { $$ = $2; }
@@ -139,12 +158,18 @@ void yyerror(const char* msg)
 int main(int argc, char* argv[])
 {
     int debug = 0;
+    int parse_only = 0;
+    int stop_after_type_check = 0;
     char* inarg = NULL;
     char* outarg = NULL;
     for (int i = 1; i < argc; i++) {
         char* c = argv[i];
         if (strcmp(c, "-v") == 0) {
             debug = debug_type_checker = 1;
+        } else if (strcmp(c, "-p") == 0) {
+            parse_only = 1;
+        } else if (strcmp(c, "-t") == 0) {
+            stop_after_type_check = 1;
         } else if (i + 1 < argc && strcmp(c, "-o") == 0) {
             if (outarg) {
                 fprintf(stderr, "intml: error: too many output files\n");
@@ -191,12 +216,17 @@ int main(int argc, char* argv[])
     if (!tree) {
         exit(EXIT_FAILURE);
     }
-    if (debug) {
+    if (debug || parse_only) {
         print_tree(stdout, tree);
         printf("\n");
     }
+    if (parse_only)
+        return 0;
     // type check!
     type_check_tree(tree);
+    if (stop_after_type_check)
+        return 0;
+
     // Check we have a main function <- entry point
     check_runtime_properties(tree);
     if (debug) {

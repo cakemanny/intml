@@ -239,6 +239,54 @@ Expr* ifexpr(Expr* condition, Expr* btrue, Expr* bfalse)
     return result;
 }
 
+Expr* list(ExprList* exprs)
+{
+    Expr* result = expr(LIST);
+    result->expr_list = exprs;
+    return result;
+}
+
+Expr* vector(ExprList* exprs)
+{
+    Expr* result = expr(VECTOR);
+    result->expr_list = exprs;
+    return result;
+}
+
+Expr* tuple(ExprList* exprs)
+{
+    Expr* result = expr(TUPLE);
+    result->expr_list = exprs;
+    return result;
+}
+
+ExprList* exprlist()
+{
+    return NULL;
+}
+
+ExprList* add_expr(ExprList* list, Expr* to_add)
+{
+    ExprList* result = xmalloc(sizeof *result);
+    result->expr = to_add;
+    result->next = list;
+    return result;
+}
+
+ExprList* reverse_list(ExprList* list)
+{
+    ExprList* tmp;
+    ExprList* newhead = NULL;
+    while (list) { // three pointer shuffle!
+        tmp         = list->next;
+        list->next  = newhead;
+        newhead     = list;
+        list        = tmp;
+    }
+    return newhead;
+}
+
+
 static struct TypeExpr* typexpr(enum TypeExprTag tag)
 {
     struct TypeExpr* result = xmalloc(sizeof *result);
@@ -268,6 +316,22 @@ TypeExpr* typeconstraint(int constraint_id)
     return result;
 }
 
+TypeExpr* typetuple(TypeExpr* left, TypeExpr* right)
+{
+    struct TypeExpr* result = typexpr(TYPE_TUPLE);
+    result->left = left;
+    result->right = right;
+    return result;
+}
+
+TypeExpr* typeconstructor(TypeExpr* param, Symbol constructor)
+{
+    struct TypeExpr* result = typexpr(TYPE_CONSTRUCTOR);
+    result->param = param;
+    result->constructor = constructor;
+    return result;
+}
+
 
 /*----------------------------------------*\
  * Fns for printing the AST               *
@@ -289,6 +353,17 @@ void print_typexpr(FILE* out, TypeExpr* expr)
     case TYPE_CONSTRAINT:
         fprintf(out, "'%d", expr->constraint_id);
         break;
+    case TYPE_TUPLE:
+        print_typexpr(out, expr->left);
+        fputs(" * ", out);
+        print_typexpr(out, expr->right);
+        break;
+    case TYPE_CONSTRUCTOR:
+        fputc('(', out);
+        print_typexpr(out, expr->param);
+        fprintf(out, " %s", expr->constructor);
+        fputc(')', out);
+        break;
     }
 }
 
@@ -305,6 +380,18 @@ void print_params(FILE* out, const ParamList* params)
         } else {
             fprintf(out, "(param %s)", c->param->name);
         }
+        prefix = " ";
+    }
+    fputc(')', out);
+}
+
+void print_exprlist(FILE* out, const ExprList* list)
+{
+    fputc('(', out);
+    const char* prefix = ""; // all but first get space prefix
+    for (const ExprList* c = list; c; c = c->next) {
+        fputs(prefix, out);
+        print_expr(out, c->expr);
         prefix = " ";
     }
     fputc(')', out);
@@ -365,6 +452,23 @@ void print_expr(FILE* out, const Expr* expr)
         print_expr(out, expr->btrue);
         fprintf(out, " else ");
         print_expr(out, expr->bfalse);
+        break;
+    case LIST:
+        fprintf(out, "list ");
+        print_exprlist(out, expr->expr_list);
+        break;
+    case VECTOR:
+        fprintf(out, "vector ");
+        print_exprlist(out, expr->expr_list);
+        break;
+    case TUPLE:
+        fprintf(out, "tuple ");
+        print_exprlist(out, expr->expr_list);
+        break;
+    }
+    if (expr->type) {
+        fprintf(out, " : ");
+        print_typexpr(out, expr->type);
     }
     fputc(')', out);
 }
