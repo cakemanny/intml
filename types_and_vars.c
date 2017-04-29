@@ -772,45 +772,38 @@ static int deducetype_expr(Expr* expr)
          * and checking against the params we pushed
          */
 
+        struct Var* begin = pre_param_stack_ptr;
         for (const ParamList* c = expr->func.params; c; c = c->next) {
             Param* param = c->param;
-            struct Var* it = pre_param_stack_ptr;
-            // param list has to be non-empty (otherwise we are not in this loop
-            do { // so do! allowed
-                if (param->name == it->name) {
-                    if (it->type) {
-                        if (param->type) {
-                            // compare
-                            typexpr_conforms_or_exit(it->type, param->type,
-                                    "param %s of function %s",
-                                    it->name, expr->func.name);
-                            types_added +=
-                                theorise_equal(param->type, it->type);
-                            types_added +=
-                                theorise_equal(it->type, param->type);
-                        } else {
-                            dbgtprintf("type of param %s deduced as %T\n",
-                                    it->name, it->type);
-                            param->type = it->type;
-                            ++types_added;
-                        }
-                    } else {
-                        if (param->type) {
-                            // we don't ++types_added as it->type isn't part
-                            // of the tree - it may be used to type it later
-                            // though
-                            it->type = param->type;
-                        } else {
-                            param->type = it->type = new_type_constraint();
-                            ++types_added;
-                        }
-                    }
-                    break;
+            struct Var* it = begin++;
+            assert(param->name == it->name);
+            if (it->type) {
+                if (param->type) {
+                    // compare
+                    typexpr_conforms_or_exit(it->type, param->type,
+                            "param %s of function %s",
+                            it->name, expr->func.name);
+                    types_added += theorise_equal(param->type, it->type);
+                    types_added += theorise_equal(it->type, param->type);
+                } else {
+                    dbgtprintf("type of param %s deduced as %T\n",
+                            it->name, it->type);
+                    param->type = it->type;
+                    ++types_added;
                 }
-            } while (++it != post_param_stack_ptr);
+            } else {
+                if (param->type) {
+                    // we don't ++types_added as it->type isn't part
+                    // of the tree - it may be used to type it later
+                    // though
+                    it->type = param->type;
+                } else {
+                    param->type = it->type = new_type_constraint();
+                    ++types_added;
+                }
+            }
         }
 
-        var_stack_ptr = pre_param_stack_ptr;
         // typeof(func) = typeof(params) -> typeof(func.body)
         _Bool have_type_of_params = 1;
         for (struct Var* it = pre_param_stack_ptr;
@@ -841,6 +834,7 @@ static int deducetype_expr(Expr* expr)
             }
         }
 
+        var_stack_ptr = pre_param_stack_ptr;
         push_var(expr->func.name, expr->func.functype);
 
         /*
@@ -872,10 +866,7 @@ static int deducetype_expr(Expr* expr)
         int types_added = deducetype_expr(expr->binding.init);
         TypeExpr* init_type = expr->binding.init->type;
         assert(init_type->tag);
-        {
-            dbgtprintf("deduced type for %s as %T\n", expr->binding.name,
-                    init_type);
-        }
+        dbgtprintf("deduced type for %s: %T\n", expr->binding.name, init_type);
 
         struct Var* saved_stack_ptr = var_stack_ptr;
         push_var(expr->binding.name, init_type);
@@ -1055,7 +1046,7 @@ static void type_and_check_exhaustively(DeclarationList* root)
                 TypeExpr* init_type = binding.init->type;
 
                 assert(init_type->tag);
-                dbgtprintf("deduced type %T\n", init_type);
+                dbgtprintf("deduced type %s: %T\n", binding.name, init_type);
                 if (binding.type) {
                     typexpr_conforms_or_exit(binding.type, init_type,
                             "type annotation does not matched "
@@ -1134,7 +1125,6 @@ static void type_and_check_exhaustively(DeclarationList* root)
                 assert(have_type_of_params);
                 assert(bodytype->tag);
                 {
-                    dbgtprintf("bodytype: %T\n", bodytype);
                     TypeExpr* func_type = bodytype;
                     for (struct Var* it = post_param_stack_ptr;
                             --it >= pre_param_stack_ptr; )
