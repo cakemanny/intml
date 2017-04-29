@@ -9,6 +9,8 @@ ifndef NDEBUG
     CFLAGS += -fsanitize=address
     LDFLAGS += -fsanitize=address
   endif
+else
+  CFLAGS += -O2 -march=native
 endif
 
 YACC=bison
