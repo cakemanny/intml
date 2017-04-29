@@ -714,12 +714,8 @@ static int deducetype_expr(Expr* expr)
             // compare!
             typexpr_conforms_or_exit(left_type, right_type, "right of "
                     "equals expression does not match left side in type");
-            if (!solid_type(left_type)) {
-                types_added += theorise_equal(left_type, right_type);
-            }
-            if (!solid_type(right_type)) {
-                types_added += theorise_equal(right_type, left_type);
-            }
+            types_added += theorise_equal(left_type, right_type);
+            types_added += theorise_equal(right_type, left_type);
         }
 
         if (expr->type) {
@@ -767,12 +763,8 @@ static int deducetype_expr(Expr* expr)
                     "right side of apply expression");
             dbgtprintf("left type: %T, right type %T\n", left_type,
                     right_type);
-            if (!solid_type(left_type->left)) {
-                types_added += theorise_equal(left_type->left, right_type);
-            }
-            if (!solid_type(right_type)) {
-                types_added += theorise_equal(right_type, left_type->left);
-            }
+            types_added += theorise_equal(left_type->left, right_type);
+            types_added += theorise_equal(right_type, left_type->left);
         }
 
         if (expr->type) {
@@ -781,9 +773,7 @@ static int deducetype_expr(Expr* expr)
             typexpr_conforms_or_exit(left_type->right, expr->type,
                     "type of apply expression does not match result "
                     "type of function on left");
-            if (!solid_type(expr->type)) {
-                types_added += theorise_equal(expr->type, left_type->right);
-            }
+            types_added += theorise_equal(expr->type, left_type->right);
             // we can work out the type of the function
             TypeExpr* inferred_type = typearrow(right_type, expr->type);
             typexpr_conforms_or_exit(expr->left->type, inferred_type,
@@ -919,14 +909,10 @@ static int deducetype_expr(Expr* expr)
                             typexpr_conforms_or_exit(it->type, param->type,
                                     "param %s of function %s",
                                     it->name, expr->func.name);
-                            if (!solid_type(param->type)) {
-                                types_added +=
-                                    theorise_equal(param->type, it->type);
-                            }
-                            if (!solid_type(it->type)) {
-                                types_added +=
-                                    theorise_equal(it->type, param->type);
-                            }
+                            types_added +=
+                                theorise_equal(param->type, it->type);
+                            types_added +=
+                                theorise_equal(it->type, param->type);
                         } else {
                             dbgtprintf("type of param %s deduced as %T\n",
                                     it->name, it->type);
@@ -981,14 +967,8 @@ static int deducetype_expr(Expr* expr)
             if (expr->func.functype) {
                 typexpr_conforms_or_exit(func_type, expr->func.functype,
                         "type of function %s", expr->func.name);
-                if (!solid_type(expr->func.functype)) {
-                    types_added +=
-                        theorise_equal(expr->func.functype, func_type);
-                }
-                if (!solid_type(func_type)) {
-                    types_added +=
-                        theorise_equal(func_type, expr->func.functype);
-                }
+                types_added += theorise_equal(expr->func.functype, func_type);
+                types_added += theorise_equal(func_type, expr->func.functype);
             } else {
                 expr->func.functype = func_type;
                 types_added++;
@@ -1009,14 +989,8 @@ static int deducetype_expr(Expr* expr)
             typexpr_conforms_or_exit(subexprtype, expr->type,
                     "recorded type of expression following %s "
                     "definition", expr->func.name);
-            if (!solid_type(expr->type)) {
-                dbgprint("WE NOT SOLID!\n");
-                dbgtprintf("subexprtype: %T\n", subexprtype);
-                dbgtprintf("expr->type: %T\n", expr->type);
-                types_added += theorise_equal(expr->type, subexprtype);
-            } else if (!solid_type(subexprtype)) {
-                types_added += theorise_equal(subexprtype, expr->type);
-            }
+            types_added += theorise_equal(expr->type, subexprtype);
+            types_added += theorise_equal(subexprtype, expr->type);
         } else {
             expr->type = subexprtype;
             types_added++;
@@ -1050,11 +1024,8 @@ static int deducetype_expr(Expr* expr)
             typexpr_conforms_or_exit(subexprtype, expr->type,
                     "conflicting types for expression following "
                     "binding of %s ", expr->binding.name);
-            if (!solid_type(expr->type)) {
-                types_added += theorise_equal(expr->type, subexprtype);
-            } else if (!solid_type(subexprtype)) {
-                types_added += theorise_equal(subexprtype, expr->type);
-            }
+            types_added += theorise_equal(expr->type, subexprtype);
+            types_added += theorise_equal(subexprtype, expr->type);
         } else {
             expr->type = subexprtype;
             types_added++;
@@ -1075,9 +1046,7 @@ static int deducetype_expr(Expr* expr)
         {
             typexpr_conforms_or_exit(int_type, expr->condition->type,
                     "condition of if expression");
-            if (!solid_type(expr->condition->type)) {
-                types_added += theorise_equal(expr->condition->type, int_type);
-            }
+            types_added += theorise_equal(expr->condition->type, int_type);
         }
 
         TypeExpr* true_type = expr->btrue->type;
@@ -1088,22 +1057,14 @@ static int deducetype_expr(Expr* expr)
             // compare!
             typexpr_conforms_or_exit(true_type, false_type, "true and false "
                     "branches of if expression with different types");
-            if (!solid_type(true_type)) {
-                types_added += theorise_equal(true_type, false_type);
-            }
-            if (!solid_type(false_type)) {
-                types_added += theorise_equal(false_type, true_type);
-            }
+            types_added += theorise_equal(true_type, false_type);
+            types_added += theorise_equal(false_type, true_type);
         }
 
         if (expr->type) {
             typexpr_conforms_or_exit(true_type, expr->type, "if expression");
-            if (!solid_type(expr->type)) {
-                types_added += theorise_equal(expr->type, true_type);
-            }
-            if (!solid_type(true_type)) {
-                types_added += theorise_equal(true_type, expr->type);
-            }
+            types_added += theorise_equal(expr->type, true_type);
+            types_added += theorise_equal(true_type, expr->type);
         } else {
             expr->type = true_type;
             types_added++;
@@ -1127,12 +1088,8 @@ static int deducetype_expr(Expr* expr)
                 TypeExpr* tltype = tail->expr->type;
                 typexpr_conforms_or_exit(hdtype, tltype, "item %d in %s, "
                         "type does not 1st item type", pos, constrname);
-                if (!solid_type(hdtype)) {
-                    types_added += theorise_equal(hdtype, tltype);
-                }
-                if (!solid_type(tltype)) {
-                    types_added += theorise_equal(tltype, hdtype);
-                }
+                types_added += theorise_equal(hdtype, tltype);
+                types_added += theorise_equal(tltype, hdtype);
             }
         }
 
@@ -1240,14 +1197,8 @@ static void type_and_check_exhaustively(DeclarationList* root)
                             "type annotation does not matched "
                             "deduced type for toplevel binding %s",
                             binding.name);
-                    if (solid_type(init_type) && solid_type(binding.type)) {
-                        // Do nothing - they must equal
-                    } else if (solid_type(init_type)) {
-                        decl->binding.type = binding.type = init_type;
-                        types_added++;
-                    } else {
-                        types_added += imposetypeon_expr(binding.init, binding.type);
-                    }
+                    types_added += theorise_equal(binding.type, init_type);
+                    types_added += theorise_equal(init_type, binding.type);
                 } else {
                     decl->binding.type = binding.type = init_type;
                     ++types_added;
@@ -1289,10 +1240,8 @@ static void type_and_check_exhaustively(DeclarationList* root)
                             typexpr_conforms_or_exit(it->type, param->type,
                                     "param %s of toplevel function %s",
                                     it->name, decl->func.name);
-                            if (!solid_type(param->type)) {
-                                types_added +=
-                                    theorise_equal(param->type, it->type);
-                            }
+                            types_added +=
+                                theorise_equal(param->type, it->type);
                         } else {
                             dbgtprintf("type of param %s deduced as %T\n",
                                     it->name, it->type);
