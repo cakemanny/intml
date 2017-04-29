@@ -366,6 +366,10 @@ static void apply_theory_expr(Expr* expr, int constraint_id, TypeExpr* theory)
         apply_theory_params(expr->func.params, constraint_id, theory);
         apply_theory_expr(expr->func.body, constraint_id, theory);
         apply_theory_expr(expr->func.subexpr, constraint_id, theory);
+        if (type_uses_constraint(expr->func.functype, constraint_id)) {
+            expr->func.functype = replaced_constraint(expr->func.functype,
+                    constraint_id, theory);
+        }
         break;
       case BIND_EXPR:
         apply_theory_expr(expr->binding.init, constraint_id, theory);
