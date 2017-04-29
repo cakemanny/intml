@@ -502,115 +502,6 @@ static int theorise_equal(TypeExpr* etype, TypeExpr* newtype)
     abort(); // shouln't be possible
 }
 
-/*
- * Use type information from one part of the tree to inflict it on the other
- */
-static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
-{
-    switch (expr->tag) {
-      case PLUS:
-      case MINUS:
-      case MULTIPLY:
-      case DIVIDE:
-      case LESSTHAN: // THESE should become bool in the future
-      case LESSEQUAL:
-      {
-        // Do not be bullied!
-        return 0;
-      }
-      case EQUAL:
-      {
-        return imposetypeon_expr(expr->left, newtype)
-            + imposetypeon_expr(expr->right, newtype);
-      }
-      case APPLY:
-      {
-        // Want left and right of (f x) such  that
-        // f : 'a -> 'b , x : 'a
-        if (expr->right->type) {
-            if (!solid_type(expr->left->type)) {
-                newtype = typearrow(expr->right->type, newtype);
-                if (debug_type_checker) {
-                    tprintf(stderr, PFX"updating imposing type to %T for "
-                            "left side of apply\n", newtype);
-                }
-                return imposetypeon_expr(expr->left, newtype);
-            }
-        }
-        return 0;
-      }
-      case VAR:
-      {
-        if (!expr->type) {
-            if (debug_type_checker) {
-                tprintf(stderr, PFX"imposing type %T on free variable %s\n",
-                        newtype, expr->var);
-            }
-            expr->type = newtype;
-            return 1;
-        } else {
-            return theorise_equal(expr->type, newtype);
-        }
-      }
-      case UNITVAL:
-      {
-          return 0;
-      }
-      case INTVAL:
-      {
-          return 0;
-      }
-      case STRVAL:
-      {
-          return 0;
-      }
-      case FUNC_EXPR:
-      {
-          return imposetypeon_expr(expr->func.subexpr, newtype);
-      }
-      case BIND_EXPR:
-      {
-          return imposetypeon_expr(expr->binding.subexpr, newtype);
-      }
-      case IF_EXPR:
-      {
-          // Don't impose type on condition - which is bool/int
-          return imposetypeon_expr(expr->btrue, newtype)
-              + imposetypeon_expr(expr->bfalse, newtype);
-      }
-      case LIST:
-      case VECTOR:
-      {
-          // Check the imposing type is of the right type constructor...
-          // if it is, apply the param type to the expressions in the list?
-          if (newtype->tag != TYPE_CONSTRUCTOR) {
-              return 0;
-          }
-          if (newtype->constructor ==
-                  ((expr->tag == LIST) ? symbol("list") : symbol("vector")))
-          {
-              int types_added = 0;
-              for (ExprList* l = expr->expr_list; l; l = l->next) {
-                  types_added += imposetypeon_expr(l->expr, newtype->param);
-              }
-              return types_added;
-          }
-          return 0;
-      }
-      case TUPLE:
-      {
-          // Needs to be a tuple type with the right arity, then if so,
-          // apply to subexprs
-          // TODO
-          assert(0 && "TODO: TUPLE");
-          return 0;
-      }
-    }
-    // Shouldn't be possible to get here, use abort instead of assert to keep
-    // the real gcc happy even in with NDEBUG
-    abort();
-}
-
 __attribute__((const))
 static const char* expr_name(enum ExprTag tag)
 {
@@ -674,23 +565,15 @@ static int deducetype_expr(Expr* expr)
       {
         int types_added =
             deducetype_expr(expr->left) + deducetype_expr(expr->right);
-        TypeExpr* left_type = expr->left->type;
-        TypeExpr* right_type = expr->right->type;
 
-        if (solid_type(left_type)) {
-            typexpr_equals_or_exit(int_type, left_type,
-                    "left side of %s expression", expr_name(expr->tag));
-        } else {
-            // Come back and impose types on free variables
-            types_added += imposetypeon_expr(expr->left, int_type);
-        }
-        if (solid_type(right_type)) {
-            typexpr_equals_or_exit(int_type, right_type,
-                    "right side of %s expression", expr_name(expr->tag));
-        } else {
-            // Come back and impose types on free variables
-            types_added += imposetypeon_expr(expr->right, int_type);
-        }
+        typexpr_conforms_or_exit(int_type, expr->left->type,
+                "left side of %s expression", expr_name(expr->tag));
+        types_added += theorise_equal(expr->left->type, int_type);
+
+        typexpr_conforms_or_exit(int_type, expr->right->type,
+                "right side of %s expression", expr_name(expr->tag));
+        types_added += theorise_equal(expr->right->type, int_type);
+
         // type should be int
         if (expr->type) {
             typexpr_equals_or_exit(int_type, expr->type,
@@ -708,15 +591,10 @@ static int deducetype_expr(Expr* expr)
         TypeExpr* left_type = expr->left->type;
         TypeExpr* right_type = expr->right->type;
 
-        assert(left_type->tag); // try to get killed by ASAN
-        assert(right_type->tag);
-        {
-            // compare!
-            typexpr_conforms_or_exit(left_type, right_type, "right of "
-                    "equals expression does not match left side in type");
-            types_added += theorise_equal(left_type, right_type);
-            types_added += theorise_equal(right_type, left_type);
-        }
+        typexpr_conforms_or_exit(left_type, right_type, "right of "
+                "equals expression does not match left side in type");
+        types_added += theorise_equal(left_type, right_type);
+        types_added += theorise_equal(right_type, left_type);
 
         if (expr->type) {
             typexpr_equals_or_exit(int_type, expr->type, "equals expression");
@@ -768,8 +646,6 @@ static int deducetype_expr(Expr* expr)
         }
 
         if (expr->type) {
-            assert(left_type->tag);
-            assert(right_type->tag);
             typexpr_conforms_or_exit(left_type->right, expr->type,
                     "type of apply expression does not match result "
                     "type of function on left");
@@ -779,9 +655,8 @@ static int deducetype_expr(Expr* expr)
             typexpr_conforms_or_exit(expr->left->type, inferred_type,
                     "type of (RHS -> apply expr) does not match "
                     "the function type");
-            if (!solid_type(expr->left->type)) {
-                types_added +=
-                    theorise_equal(expr->left->type, inferred_type);
+            if (!solid_type(left_type)) {
+                types_added += theorise_equal(left_type, inferred_type);
             } else {
                 free((void*)inferred_type);
             }
@@ -942,20 +817,11 @@ static int deducetype_expr(Expr* expr)
                 it != post_param_stack_ptr; ++it) {
             if (!it->type) have_type_of_params = 0;
         }
-        int num_params = 0;
-        for (const ParamList* c = expr->func.params; c; c = c->next) {
-            if (!c->param->type)
-                have_type_of_params = 0;
-            num_params++;
-        }
 
-        TypeExpr* func_type = NULL;
-
-        // I'm tempted to say this should always be true now
         assert(have_type_of_params);
         assert(bodytype->tag);
         {
-            func_type = bodytype;
+            TypeExpr* func_type = bodytype;
             for (struct Var* it = post_param_stack_ptr;
                     --it >= pre_param_stack_ptr; )
             {
@@ -974,9 +840,8 @@ static int deducetype_expr(Expr* expr)
                 types_added++;
             }
         }
-        assert(func_type->tag);
 
-        push_var(expr->func.name, func_type);
+        push_var(expr->func.name, expr->func.functype);
 
         /*
          * type the subexpr of the func expr
@@ -986,9 +851,8 @@ static int deducetype_expr(Expr* expr)
 
         assert(subexprtype->tag);
         if (expr->type) {
-            typexpr_conforms_or_exit(subexprtype, expr->type,
-                    "recorded type of expression following %s "
-                    "definition", expr->func.name);
+            typexpr_conforms_or_exit(subexprtype, expr->type, "recorded type "
+                    "of expression following %s definition", expr->func.name);
             types_added += theorise_equal(expr->type, subexprtype);
             types_added += theorise_equal(subexprtype, expr->type);
         } else {
