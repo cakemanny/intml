@@ -22,7 +22,9 @@ let app3 =
 let infer (x:int) = x         (* want this to now gain the type int -> int *)
 let deduce = infer 10
 
-let x = fst [| 1 ; 2 |]
+let x =
+  let fst xs = 1 in
+  fst [ 1 ; 2 ]
 
 let len_of_it = "
   string length

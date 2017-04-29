@@ -177,6 +177,7 @@ struct TypeExpr {
             TypeExpr* right;
         };
         int constraint_id;
+        // perhaps tuple should be a list of types...
         struct {
             TypeExpr* param;
             Symbol constructor;

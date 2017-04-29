@@ -64,6 +64,7 @@ static TypeExpr* lookup_typexpr(Symbol name)
     TypeExpr* res = lookup_ornull_typexpr(name);
     if (res)
         return res;
+    fprintf(stderr, "%s\n", name);
     assert(0 && "type not in type_names table");
     abort(); // shut mingw-w64 up
 }
@@ -107,13 +108,9 @@ __pure static _Bool typexpr_equals(TypeExpr* left, TypeExpr* right)
             return typexpr_equals(dleft, dright);
           }
           case TYPE_ARROW:
-          {
-            TypeExpr* dleft = deref_typexpr(left->name);
-            if (dleft->name == left->name)
-                return 0;
-            return typexpr_equals(dleft, right);
-          }
           case TYPE_CONSTRAINT:
+          case TYPE_TUPLE:
+          case TYPE_CONSTRUCTOR:
           {
             TypeExpr* dleft = deref_typexpr(left->name);
             if (dleft->name == left->name)
@@ -124,15 +121,33 @@ __pure static _Bool typexpr_equals(TypeExpr* left, TypeExpr* right)
       }
       case TYPE_ARROW: // both type_arrows or right is constraint
       {
-        if (right->tag == TYPE_CONSTRAINT) {
-            return 0; // could conform, but not equal
+        if (right->tag != TYPE_ARROW) {
+            return 0;
         }
         return typexpr_equals(left->left, right->left)
             && typexpr_equals(left->right, right->right);
       }
       case TYPE_CONSTRAINT:
       {
-          return left->constraint_id == right->constraint_id;
+        if (right->tag != TYPE_CONSTRUCTOR) {
+            return 0; // could conform but not equal
+        }
+        return left->constraint_id == right->constraint_id;
+      }
+      case TYPE_TUPLE:
+      {
+        if (right->tag != TYPE_TUPLE) {
+            return 0;
+        }
+        return typexpr_equals(left->left, right->left)
+            && typexpr_equals(left->right, right->right);
+      }
+      case TYPE_CONSTRUCTOR:
+      {
+        // until we add some more type expressions
+        assert(right->tag == TYPE_CONSTRUCTOR);
+        return left->constructor == right->constructor
+            && typexpr_equals(left->param, right->param);
       }
     }
     abort(); // Shouldnt be possible
@@ -162,6 +177,14 @@ __pure static _Bool typexpr_conforms_to(TypeExpr* left, TypeExpr* right)
     if (dleft->tag == TYPE_NAME || dright->tag == TYPE_NAME) {
         return 0;
     }
+    if (dleft->tag != dright->tag) {
+        return 0;
+    }
+    if (dleft->tag == TYPE_CONSTRUCTOR) {
+        return left->constructor == right->constructor
+            && typexpr_conforms_to(left->param, right->param);
+    }
+    // Must be both tuple or both arrow
     return typexpr_conforms_to(left->left, right->left)
         && typexpr_conforms_to(left->right, right->right);
 }
@@ -247,9 +270,12 @@ __pure static _Bool solid_type(TypeExpr* type)
         case TYPE_NAME:
             return 1;
         case TYPE_ARROW:
+        case TYPE_TUPLE:
             return solid_type(type->left) && solid_type(type->right);
         case TYPE_CONSTRAINT:
             return 0;
+        case TYPE_CONSTRUCTOR:
+            return solid_type(type->param);
     }
     abort();
 }
@@ -262,9 +288,11 @@ static _Bool type_uses_constraint(TypeExpr* type, int constraint_id)
     {
       // the dereffed might, but dereffing will get the new value
       case TYPE_NAME: return 0;
+      case TYPE_TUPLE:
       case TYPE_ARROW: return type_uses_constraint(type->left, constraint_id)
                        || type_uses_constraint(type->right, constraint_id);
       case TYPE_CONSTRAINT: return type->constraint_id == constraint_id;
+      case TYPE_CONSTRUCTOR: return type_uses_constraint(type->param, constraint_id);
     }
     abort();
 }
@@ -283,6 +311,12 @@ static TypeExpr* replaced_constraint(
       case TYPE_CONSTRAINT:
         return toreplace->constraint_id == constraint_id ?
             theory : toreplace;
+      case TYPE_TUPLE:
+        return typetuple(
+                replaced_constraint(toreplace->left, constraint_id, theory),
+                replaced_constraint(toreplace->right, constraint_id, theory));
+      case TYPE_CONSTRUCTOR:
+        return replaced_constraint(toreplace->param, constraint_id, theory);
     }
     abort(); // shouln't be possible
 }
@@ -324,9 +358,9 @@ static void apply_theory_expr(Expr* expr, int constraint_id, TypeExpr* theory)
       case VAR:
       case UNITVAL:
       case INTVAL: // Nothing to do here
+      case STRVAL:
         break;
       case FUNC_EXPR:
-        // TODO: IF_EXPR
         apply_theory_params(expr->func.params, constraint_id, theory);
         apply_theory_expr(expr->func.body, constraint_id, theory);
         apply_theory_expr(expr->func.subexpr, constraint_id, theory);
@@ -339,6 +373,13 @@ static void apply_theory_expr(Expr* expr, int constraint_id, TypeExpr* theory)
         apply_theory_expr(expr->condition, constraint_id, theory);
         apply_theory_expr(expr->btrue, constraint_id, theory);
         apply_theory_expr(expr->bfalse, constraint_id, theory);
+        break;
+      case LIST:
+      case VECTOR:
+      case TUPLE:
+        for (ExprList* l = expr->expr_list; l; l = l->next) {
+            apply_theory_expr(l->expr, constraint_id, theory);
+        }
         break;
     }
 }
@@ -418,20 +459,23 @@ static int theorise_equal(TypeExpr* etype, TypeExpr* newtype)
             }
         }
       }
+      case TYPE_TUPLE:
       case TYPE_ARROW:
       {
-        switch (newtype->tag) {
-          case TYPE_ARROW:
-          {
-            return theorise_equal(etype->left, newtype->left)
-                + theorise_equal(etype->right, newtype->right);
-          }
-          case TYPE_NAME:
-          case TYPE_CONSTRAINT:
+        if (newtype->tag != etype->tag) {
             return 0;
         }
+        return theorise_equal(etype->left, newtype->left)
+            + theorise_equal(etype->right, newtype->right);
       }
       case TYPE_NAME:
+        return 0;
+      case TYPE_CONSTRUCTOR:
+        if (newtype->tag != TYPE_CONSTRUCTOR)
+            return 0;
+        if (etype->constructor == newtype->constructor) {
+            return theorise_equal(etype->param, newtype->param);
+        }
         return 0;
     }
     abort(); // shouln't be possible
@@ -495,6 +539,10 @@ static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
       {
           return 0;
       }
+      case STRVAL:
+      {
+          return 0;
+      }
       case FUNC_EXPR:
       {
           return imposetypeon_expr(expr->func.subexpr, newtype);
@@ -509,6 +557,33 @@ static int imposetypeon_expr(Expr* expr, TypeExpr* newtype)
           return imposetypeon_expr(expr->btrue, newtype)
               + imposetypeon_expr(expr->bfalse, newtype);
       }
+      case LIST:
+      case VECTOR:
+      {
+          // Check the imposing type is of the right type constructor...
+          // if it is, apply the param type to the expressions in the list?
+          if (newtype->tag != TYPE_CONSTRUCTOR) {
+              return 0;
+          }
+          if (newtype->constructor ==
+                  ((expr->tag == LIST) ? symbol("list") : symbol("vector")))
+          {
+              int types_added = 0;
+              for (ExprList* l = expr->expr_list; l; l = l->next) {
+                  types_added += imposetypeon_expr(l->expr, newtype->param);
+              }
+              return types_added;
+          }
+          return 0;
+      }
+      case TUPLE:
+      {
+          // Needs to be a tuple type with the right arity, then if so,
+          // apply to subexprs
+          // TODO
+          assert(0 && "TODO: TUPLE");
+          return 0;
+      }
     }
     // Shouldn't be possible to get here, use abort instead of assert to keep
     // the real gcc happy even in with NDEBUG
@@ -519,12 +594,13 @@ __attribute__((const))
 static const char* expr_name(enum ExprTag tag)
 {
     assert(tag != 0);
-    assert(tag <= IF_EXPR);
+    assert(tag <= TUPLE);
     const char* expr_name[] = {
         "", "plus", "minus", "multiply", "divide",
         "equal",
         "less than", "less than or equal",
-        "apply", "var", "unit", "int", "string", "func", "let", "if"
+        "apply", "var", "unit", "int", "string", "func", "let", "if",
+        "list", "vector", "tuple"
     };
     return expr_name[tag];
 }
@@ -613,19 +689,13 @@ static int deducetype_expr(Expr* expr)
 
         if (left_type && right_type) {
             // compare!
-            typexpr_conforms_or_exit(left_type, right_type, "right right of "
-                    "equals expression does not match left side");
-            // TODO: check if unconstrained
-            if (solid_type(left_type) && solid_type(right_type)) {
-                // do nothing
-            } else if (solid_type(left_type)) {
-                types_added += imposetypeon_expr(expr->right, left_type);
-            } else if (solid_type(right_type)) {
+            typexpr_conforms_or_exit(left_type, right_type, "right of "
+                    "equals expression does not match left side in type");
+            if (!solid_type(left_type)) {
                 types_added += imposetypeon_expr(expr->left, right_type);
-            } else {
-                // Both wooly. get them to talk? i.e.
-                types_added += imposetypeon_expr(expr->right, left_type)
-                    + imposetypeon_expr(expr->left, expr->right->type);
+            }
+            if (!solid_type(right_type)) {
+                types_added += imposetypeon_expr(expr->right, left_type);
             }
         } else if (left_type) {
             expr->right->type = left_type;
@@ -663,13 +733,17 @@ static int deducetype_expr(Expr* expr)
 
         if (left_type) {
             if (left_type->tag != TYPE_ARROW) {
-                if (deref_typexpr(left_type->name)->tag == TYPE_ARROW) {
-                    left_type = deref_typexpr(left_type->name);
-                } else {
-                    tprintf(stderr, EPFX"left side of apply expression "
-                            "must be a function\n  expected: %T -> 'b\n "
-                            "  actual: %T\n", right_type, left_type);
-                    exit(EXIT_FAILURE);
+                if (left_type->tag == TYPE_NAME) {
+                    if (deref_typexpr(left_type->name)->tag == TYPE_ARROW) {
+                        left_type = deref_typexpr(left_type->name);
+                    } else {
+                        tprintf(stderr, EPFX"left side of apply expression "
+                                "must be a function\n  expected: %T -> 'b\n "
+                                "  actual: %T\n", right_type, left_type);
+                        exit(EXIT_FAILURE);
+                    }
+                } else if (left_type->tag == TYPE_CONSTRAINT) {
+                    assert(0 && "TODO: TYPE_CONSTRAINT in apply");
                 }
             }
             if (right_type) {
@@ -733,6 +807,8 @@ static int deducetype_expr(Expr* expr)
             return types_added;
         } else {
             if (left_type) {
+                // type of an apply expression is the result type of the
+                // function being applied
                 expr->type = left_type->right;
                 types_added++;
             }
@@ -755,7 +831,7 @@ static int deducetype_expr(Expr* expr)
                 } else if (solid_type(expr->type)) {
                     dbgtprintf("use of %s has type %T, decl has type %T\n",
                             expr->var, expr->type, found_type);
-                    // TODO?
+                    return theorise_equal(found_type, expr->type);
                 } else if (solid_type(found_type)) {
                     dbgtprintf("use of %s has type %T, decl has type %T\n",
                             expr->var, expr->type, found_type);
@@ -763,7 +839,8 @@ static int deducetype_expr(Expr* expr)
                 } else {
                     dbgtprintf("declaration but not use of %s have type: %T\n",
                             expr->var, found_type);
-                    // TODO?
+                    return theorise_equal(found_type, expr->type) +
+                        theorise_equal(expr->type, found_type);
                 }
             } else {
                 dbgtprintf("infering var %s type from expression: %T\n",
@@ -778,6 +855,8 @@ static int deducetype_expr(Expr* expr)
                 return 1;
             } else {
                 dbgprint("type of %s not known yet\n", expr->var);
+                // TODO: assign new type constraint!
+                //expr->type = found_var->type = new_type_constraint();
                 return 0;
             }
         }
@@ -855,12 +934,26 @@ static int deducetype_expr(Expr* expr)
                                     it->name, expr->func.name);
                             if (!solid_type(param->type)) {
                                 types_added +=
+                                    theorise_equal(param->type, it->type);
+                            }
+                            if (!solid_type(it->type)) {
+                                types_added +=
                                     theorise_equal(it->type, param->type);
                             }
                         } else {
                             dbgtprintf("type of param %s deduced as %T\n",
                                     it->name, it->type);
                             param->type = it->type;
+                            ++types_added;
+                        }
+                    } else {
+                        if (param->type) {
+                            // we don't ++types_added as it->type isn't part
+                            // of the tree - it may be used to type it later
+                            // though
+                            it->type = param->type;
+                        } else {
+                            param->type = it->type = new_type_constraint();
                             ++types_added;
                         }
                     }
@@ -885,6 +978,7 @@ static int deducetype_expr(Expr* expr)
 
         TypeExpr* func_type = NULL;
 
+        // I'm tempted to say this should always be true now
         if (have_type_of_params && bodytype) {
             func_type = bodytype;
             for (struct Var* it = post_param_stack_ptr;
@@ -901,6 +995,10 @@ static int deducetype_expr(Expr* expr)
                 if (!solid_type(expr->func.functype)) {
                     types_added +=
                         theorise_equal(expr->func.functype, func_type);
+                }
+                if (!solid_type(func_type)) {
+                    types_added +=
+                        theorise_equal(func_type, expr->func.functype);
                 }
             } else {
                 expr->func.functype = func_type;
@@ -1030,15 +1128,11 @@ static int deducetype_expr(Expr* expr)
             // compare!
             typexpr_conforms_or_exit(true_type, false_type, "true and false "
                     "branches of if expression with different types");
-            if (solid_type(true_type) && solid_type(false_type)) {
-                // do nothing
-            } else if (solid_type(true_type)) {
-                types_added += theorise_equal(false_type, true_type);
-            } else if (solid_type(false_type)) {
+            if (!solid_type(true_type)) {
                 types_added += theorise_equal(true_type, false_type);
-            } else {
+            }
+            if (!solid_type(false_type)) {
                 types_added += theorise_equal(false_type, true_type);
-                types_added += theorise_equal(true_type, false_type);
             }
         } else if (true_type) {
             expr->bfalse->type = true_type;
@@ -1066,6 +1160,57 @@ static int deducetype_expr(Expr* expr)
         }
         return types_added;
       }
+      case LIST:
+      case VECTOR:
+      {
+        Symbol constrname = symbol(expr_name(expr->tag));
+        int types_added = 0;
+        for (ExprList* l = expr->expr_list; l; l = l->next) {
+            types_added += deducetype_expr(l->expr);
+        }
+
+        if (expr->expr_list) { /* non-empty list */
+            ExprList* head = expr->expr_list;
+            int pos = 2;
+            for (ExprList* tail = head->next; tail; tail = tail->next, pos++) {
+                TypeExpr* hdtype = head->expr->type;
+                TypeExpr* tltype = tail->expr->type;
+                typexpr_conforms_or_exit(hdtype, tltype, "item %d in %s, "
+                        "type does not 1st item type", pos, constrname);
+                if (!solid_type(hdtype)) {
+                    types_added += theorise_equal(hdtype, tltype);
+                }
+                if (!solid_type(tltype)) {
+                    types_added += theorise_equal(tltype, hdtype);
+                }
+            }
+        }
+
+        if (expr->type) {
+            if (expr->type->tag != TYPE_CONSTRUCTOR
+                    || expr->type->constructor != constrname) {
+                fprintf(stderr, EPFX"%s expression\n", expr_name(expr->tag));
+                tprintf(stderr, "  expected: 'a %s\n  actual: %T\n",
+                        constrname, expr->type);
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            if (expr->expr_list) {
+                expr->type = typeconstructor(
+                        expr->expr_list->expr->type, constrname);
+            } else {
+                expr->type = typeconstructor(new_type_constraint(), constrname);
+            }
+            types_added++;
+        }
+        return types_added;
+      }
+      case TUPLE:
+      {
+        int types_added = 0;
+        // TODO
+        return types_added;
+      }
     }
     abort(); // Shouldn't be possible to get here
 }
@@ -1082,21 +1227,24 @@ __pure static Symbol decl_name(Declaration* declaration)
     }
     abort();
 }
+__pure static TypeExpr** decl_type_ptr(Declaration* declaration)
+{
+    switch (declaration->tag) {
+        case DECL_FUNC: return &declaration->func.type;
+        case DECL_BIND: return &declaration->binding.type;
+                        // chances are we don't want this case:
+        case DECL_TYPE: return &declaration->type.definition;
+    }
+    abort();
+}
 /*
  * A helper function for accessing the type of any declaration types
  * Note, the type of a type declaration doesn't really fit the semantics of
  * the other types of declarations
  */
-static TypeExpr* decl_type(Declaration* declaration)
+__pure static TypeExpr* decl_type(Declaration* declaration)
 {
-    switch (declaration->tag) {
-        case DECL_FUNC: return declaration->func.type;
-        case DECL_BIND: return declaration->binding.type;
-                        // chances are we don't want this case:
-        case DECL_TYPE: fprintf(stderr, PFX"warning: unexpected use of decl_type\n");
-                        return declaration->type.definition;
-    }
-    abort();
+    return *decl_type_ptr(declaration);
 }
 
 static void type_and_check_exhaustively(DeclarationList* root)
@@ -1143,10 +1291,7 @@ static void type_and_check_exhaustively(DeclarationList* root)
                         } else if (solid_type(init_type)) {
                             binding.type = init_type;
                             types_added++;
-                        } else if (solid_type(binding.type)) {
-                            types_added += imposetypeon_expr(binding.init, binding.type);
                         } else {
-                            // Maybe they can talk to each other a bit?
                             types_added += imposetypeon_expr(binding.init, binding.type);
                         }
                     } else {
@@ -1203,6 +1348,14 @@ static void type_and_check_exhaustively(DeclarationList* root)
                                     it->name, it->type);
                             param->type = it->type;
                             ++types_added;
+                        }
+                    } else {
+                        if (param->type) {
+                            it->type = param->type;
+                        } else {
+                            dbgprint("adding new type constraint for param %s\n",
+                                    param->name);
+                            param->type = it->type = new_type_constraint();
                         }
                     }
                 }
@@ -1280,17 +1433,8 @@ static void type_and_check_exhaustively(DeclarationList* root)
                         fputs("\n", stderr);
 
                         if (it->type && !decl_type(decl)) {
-                            switch (decl->tag) {
-                                case DECL_FUNC:
-                                    decl->func.type = it->type;
-                                    break;
-                                case DECL_BIND:
-                                    decl->binding.type = it->type;
-                                    break;
-                                case DECL_TYPE:
-                                    assert(0 && "type declaration without type");
-                                    break;
-                            }
+                            assert(decl->tag != DECL_TYPE);
+                            *decl_type_ptr(decl) = it->type;
                         }
                     }
                 }
@@ -1428,6 +1572,23 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
         result &= check_if_fully_typed_expr(expr->btrue, hierachy);
         result &= check_if_fully_typed_expr(expr->bfalse, hierachy);
         break;
+      }
+      case LIST:
+      case VECTOR:
+      {
+          if (!expr->type) {
+              fprintf(stderr, EPFX"%s with no type\n", expr_name(expr->tag));
+              print_binding_hierachy(stderr, hierachy);
+              result = 0;
+          }
+          for (ExprList* l = expr->expr_list; l; l = l->next) {
+              result &= check_if_fully_typed_expr(l->expr, hierachy);
+          }
+          break;
+      }
+      case TUPLE:
+      {
+          assert(0 && "TODO: TUPLEs");
       }
     }
     return result;

@@ -11,7 +11,7 @@ failures=0
 
 expect_fail() {
     code=$1
-    if (echo "$code$end" | $intml -o /dev/null - >/dev/null 2>&1); then
+    if (echo "$code$end" | $intml -t -o /dev/null - >/dev/null 2>&1); then
         echo "${red}fail:${reset} compiled without error: $code"
         failures=$(($failures + 1))
     else
@@ -20,7 +20,7 @@ expect_fail() {
 }
 expect_pass() {
     code=$1
-    if (echo "$code$end" | $intml -o /dev/null -); then
+    if (echo "$code$end" | $intml -t -o /dev/null -); then
         echo "${green}pass:${reset} compiled: $code"
     else
         echo "${red}fail:${reset} did not compile: $code"
@@ -64,7 +64,33 @@ expect_pass "let fincr f = let g () = 1 + f () in g"
 expect_pass "let infer x = x    let deduce = infer 10"
 
 # ('a + ? => 'a:int) && f x = x => int = typeof(f x) = typeof(x)
-expect_pass "let f x = x    let y = f y + f y"
+expect_pass "let f x = x    let g y = f y + f y"
+
+# lists
+expect_pass "let x = [ 1; 2; 3 ]"
+# lists should be of same type
+expect_fail "let x = [ 1 ; () ]"
+expect_fail "let x = [ () ; 2 ]"
+expect_fail 'let x = [ "0" ; 1 ]'
+expect_fail 'let x = [ 1 ; "2" ]'
+# empty list conforms to type of any other list
+expect_pass "let x = [1] = []"
+expect_pass "let x = ([] : string list)"
+
+# Vectors
+expect_pass "let x = [| 1; 2; 3 |]"
+# vectors should be of same type
+expect_fail "let x = [| 1 ; () |]"
+expect_fail "let x = [| () ; 2 |]"
+expect_fail 'let x = [| "0" ; 1 |]'
+expect_fail 'let x = [| 1 ; "2" |]'
+# empty vector conforms to type of any other list
+expect_pass "let x = [| 1 |] = [| |]"
+expect_pass "let x = ([| |] : string vector)"
+
+#cannot compare lists with vectors
+expect_fail "let x = [] = [||]"
+expect_fail "let x = [ 1 ] = [| 1 |]"
 
 # type aliases
 expect_pass "type metre = int   let f (w:metre) (h:metre) = w * h / 2"
