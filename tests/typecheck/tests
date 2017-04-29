@@ -68,6 +68,8 @@ expect_pass "let apply (f:int -> int) x = f x"
 expect_pass "let fincr (f: unit -> int) = let g () = 1 + f () in g"
 # and with some inference
 expect_pass "let fincr f = let g () = 1 + f () in g"
+expect_pass "let eq a b = a = b  let x = eq 1 2"
+expect_fail 'let eq a b = a = b  let x = eq 1 "1"'
 
 # Want to be able to infer the type of an earlier function from it's use
 # 10:int && infer 10 => x = 10 in infer x = x => x:int

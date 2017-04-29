@@ -438,19 +438,24 @@ static int theorise_equal(TypeExpr* etype, TypeExpr* newtype)
       case TYPE_CONSTRAINT:
       {
         const int eid = etype->constraint_id;
-        const int nid = etype->constraint_id;
         // Check whether the theories on this constraint have been updated
         if (constraint_theories[eid]) {
-            dbgtprintf("constraint %d already has theory %T\n", eid,
-                    constraint_theories[eid]);
+            if (debug_type_checker
+                    && (newtype->tag != TYPE_CONSTRAINT
+                        || newtype->constraint_id != eid)) {
+                dbgtprintf("constraint %d already has theory %T, ignore "
+                        "theory %T\n", eid, constraint_theories[eid], newtype);
+            }
+
             // ignore newtype
             return 0;
         } else if (newtype->tag != TYPE_CONSTRAINT) {
-            dbgtprintf("constraint %d <- %T\n", eid, newtype);
+            dbgtprintf("'%d <- %T\n", eid, newtype);
             constraint_theories[eid] = newtype;
             return 1;
         } else {
             assert(newtype->tag == TYPE_CONSTRAINT);
+            const int nid = newtype->constraint_id;
             if (nid == eid) {
                 return 0;
             } else if (nid < eid) {
@@ -460,10 +465,16 @@ static int theorise_equal(TypeExpr* etype, TypeExpr* newtype)
                 assert(nid > eid);
                 // repoint highest ID to lowest
                 if (constraint_theories[nid]) {
+                    // Check their theory isn't us
+                    if (constraint_theories[nid] == etype) {
+                        return 0;
+                    }
                     // steal their theory since we don't have one
+                    dbgtprintf("'%d <- %T\n", eid, constraint_theories[nid]);
                     constraint_theories[eid] = constraint_theories[nid];
                 }
                 // Make us their theory
+                dbgtprintf("'%d <- %T\n", nid, etype);
                 constraint_theories[nid] = etype;
                 return 1;
             }
