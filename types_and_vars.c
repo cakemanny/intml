@@ -316,7 +316,9 @@ static TypeExpr* replaced_constraint(
                 replaced_constraint(toreplace->left, constraint_id, theory),
                 replaced_constraint(toreplace->right, constraint_id, theory));
       case TYPE_CONSTRUCTOR:
-        return replaced_constraint(toreplace->param, constraint_id, theory);
+        return typeconstructor(
+            replaced_constraint(toreplace->param, constraint_id, theory),
+            toreplace->constructor);
     }
     abort(); // shouln't be possible
 }
@@ -425,6 +427,7 @@ static void apply_theory(
  * Attempt to add a theory that these types are equal. Which we will later
  * try to unify
  */
+__attribute__((warn_unused_result))
 static int theorise_equal(TypeExpr* etype, TypeExpr* newtype)
 {
     switch (etype->tag) {
@@ -695,12 +698,12 @@ static int deducetype_expr(Expr* expr)
                     "equals expression does not match left side in type");
             // TODO: change to adding theories
             if (!solid_type(left_type)) {
-                types_added += imposetypeon_expr(expr->left, right_type);
-                //types_added += theorise_equal(left_type, right_type);
+                //types_added += imposetypeon_expr(expr->left, right_type);
+                types_added += theorise_equal(left_type, right_type);
             }
             if (!solid_type(right_type)) {
-                types_added += imposetypeon_expr(expr->right, left_type);
-                //types_added += theorise_equal(right_type, left_type);
+                //types_added += imposetypeon_expr(expr->right, left_type);
+                types_added += theorise_equal(right_type, left_type);
             }
         }
 
@@ -759,31 +762,28 @@ static int deducetype_expr(Expr* expr)
 
         if (expr->type) {
             assert(left_type->tag);
-            {
-                typexpr_conforms_or_exit(left_type->right, expr->type,
-                        "type of apply expression does not match result "
-                        "type of function on left");
-                if (!solid_type(expr->type)) {
-                    types_added += theorise_equal(expr->type, left_type->right);
-                }
+            assert(right_type->tag);
+            typexpr_conforms_or_exit(left_type->right, expr->type,
+                    "type of apply expression does not match result "
+                    "type of function on left");
+            if (!solid_type(expr->type)) {
+                types_added += theorise_equal(expr->type, left_type->right);
             }
-            {
-                // we can work out the type of the function
-                TypeExpr* inferred_type = typearrow(right_type, expr->type);
-                if (expr->left->type) {
-                    typexpr_conforms_or_exit(expr->left->type, inferred_type,
-                            "type of (RHS -> apply expr) does not match "
-                            "the function type");
-                    if (!solid_type(expr->left->type)) {
-                        types_added +=
-                            theorise_equal(expr->left->type, inferred_type);
-                    } else {
-                        free((void*)inferred_type);
-                    }
+            // we can work out the type of the function
+            TypeExpr* inferred_type = typearrow(right_type, expr->type);
+            if (expr->left->type) {
+                typexpr_conforms_or_exit(expr->left->type, inferred_type,
+                        "type of (RHS -> apply expr) does not match "
+                        "the function type");
+                if (!solid_type(expr->left->type)) {
+                    types_added +=
+                        theorise_equal(expr->left->type, inferred_type);
                 } else {
-                    expr->left->type = inferred_type;
-                    types_added++;
+                    free((void*)inferred_type);
                 }
+            } else {
+                expr->left->type = inferred_type;
+                types_added++;
             }
         } else {
             // type of an apply expression is the result type of the
@@ -812,7 +812,7 @@ static int deducetype_expr(Expr* expr)
                 } else if (solid_type(found_type)) {
                     dbgtprintf("use of %s has type %T, decl has type %T\n",
                             expr->var, expr->type, found_type);
-                    return imposetypeon_expr(expr, found_type);
+                    return theorise_equal(expr->type, found_type);
                 } else {
                     dbgtprintf("declaration but not use of %s have type: %T\n",
                             expr->var, found_type);
@@ -1123,18 +1123,30 @@ static int deducetype_expr(Expr* expr)
             }
         }
 
+        TypeExpr* param_type = (expr->expr_list)
+            ? expr->expr_list->expr->type
+            : new_type_constraint();
+
         if (expr->type) {
-            if (expr->type->tag != TYPE_CONSTRUCTOR
-                    || expr->type->constructor != constrname) {
+            if (expr->type->tag != TYPE_CONSTRUCTOR) {
+                if (expr->type->tag == TYPE_NAME) {
+                    // TODO: deal with these better...
+                    expr->type = deref_typexpr(expr->type->name);
+                } else if (expr->type->tag == TYPE_CONSTRAINT) {
+                    dbgprint("list expression had constraint type");
+                    TypeExpr* old_type = expr->type;
+                    expr->type = typeconstructor(param_type, constrname);
+                    types_added++;
+                    types_added += theorise_equal(old_type, expr->type);
+                }
+            }
+            if (expr->type->constructor != constrname) {
                 fprintf(stderr, EPFX"%s expression\n", expr_name(expr->tag));
                 tprintf(stderr, "  expected: 'a %s\n  actual: %T\n",
                         constrname, expr->type);
                 exit(EXIT_FAILURE);
             }
         } else {
-            TypeExpr* param_type = (expr->expr_list)
-                ? expr->expr_list->expr->type
-                : new_type_constraint();
             expr->type = typeconstructor(param_type, constrname);
             types_added++;
         }
