@@ -437,9 +437,12 @@ static int theorise_equal(TypeExpr* etype, TypeExpr* newtype)
         const int nid = etype->constraint_id;
         // Check whether the theories on this constraint have been updated
         if (constraint_theories[eid]) {
+            dbgtprintf("constraint %d already has theory %T\n", eid,
+                    constraint_theories[eid]);
             // ignore newtype
             return 0;
         } else if (newtype->tag != TYPE_CONSTRAINT) {
+            dbgtprintf("constraint %d <- %T\n", eid, newtype);
             constraint_theories[eid] = newtype;
             return 1;
         } else {
@@ -696,13 +699,10 @@ static int deducetype_expr(Expr* expr)
             // compare!
             typexpr_conforms_or_exit(left_type, right_type, "right of "
                     "equals expression does not match left side in type");
-            // TODO: change to adding theories
             if (!solid_type(left_type)) {
-                //types_added += imposetypeon_expr(expr->left, right_type);
                 types_added += theorise_equal(left_type, right_type);
             }
             if (!solid_type(right_type)) {
-                //types_added += imposetypeon_expr(expr->right, left_type);
                 types_added += theorise_equal(right_type, left_type);
             }
         }
@@ -771,19 +771,14 @@ static int deducetype_expr(Expr* expr)
             }
             // we can work out the type of the function
             TypeExpr* inferred_type = typearrow(right_type, expr->type);
-            if (expr->left->type) {
-                typexpr_conforms_or_exit(expr->left->type, inferred_type,
-                        "type of (RHS -> apply expr) does not match "
-                        "the function type");
-                if (!solid_type(expr->left->type)) {
-                    types_added +=
-                        theorise_equal(expr->left->type, inferred_type);
-                } else {
-                    free((void*)inferred_type);
-                }
+            typexpr_conforms_or_exit(expr->left->type, inferred_type,
+                    "type of (RHS -> apply expr) does not match "
+                    "the function type");
+            if (!solid_type(expr->left->type)) {
+                types_added +=
+                    theorise_equal(expr->left->type, inferred_type);
             } else {
-                expr->left->type = inferred_type;
-                types_added++;
+                free((void*)inferred_type);
             }
         } else {
             // type of an apply expression is the result type of the
@@ -1087,12 +1082,15 @@ static int deducetype_expr(Expr* expr)
         }
 
         if (expr->type) {
-            typexpr_conforms_or_exit(int_type, expr->type, "if expression");
+            typexpr_conforms_or_exit(true_type, expr->type, "if expression");
             if (!solid_type(expr->type)) {
-                types_added += theorise_equal(expr->type, int_type);
+                types_added += theorise_equal(expr->type, true_type);
+            }
+            if (!solid_type(true_type)) {
+                types_added += theorise_equal(true_type, expr->type);
             }
         } else {
-            expr->type = int_type;
+            expr->type = true_type;
             types_added++;
         }
         return types_added;
@@ -1220,34 +1218,24 @@ static void type_and_check_exhaustively(DeclarationList* root)
                 types_added += deducetype_expr(binding.init);
                 TypeExpr* init_type = binding.init->type;
 
-                if (init_type) {
-                    dbgtprintf("deduced type %T\n", init_type);
-                } else {
-                    dbgprint("unable to deduce type for top level binding %s\n",
+                assert(init_type->tag);
+                dbgtprintf("deduced type %T\n", init_type);
+                if (binding.type) {
+                    typexpr_conforms_or_exit(binding.type, init_type,
+                            "type annotation does not matched "
+                            "deduced type for toplevel binding %s",
                             binding.name);
-                }
-
-                if (init_type) {
-                    if (binding.type) {
-                        typexpr_conforms_or_exit(binding.type, init_type,
-                                "type annotation does not matched "
-                                "deduced type for toplevel binding %s",
-                                binding.name);
-                        if (solid_type(init_type) && solid_type(binding.type)) {
-                            // Do nothing - they must equal
-                        } else if (solid_type(init_type)) {
-                            binding.type = init_type;
-                            types_added++;
-                        } else {
-                            types_added += imposetypeon_expr(binding.init, binding.type);
-                        }
-                    } else {
+                    if (solid_type(init_type) && solid_type(binding.type)) {
+                        // Do nothing - they must equal
+                    } else if (solid_type(init_type)) {
                         decl->binding.type = binding.type = init_type;
-                        ++types_added;
+                        types_added++;
+                    } else {
+                        types_added += imposetypeon_expr(binding.init, binding.type);
                     }
                 } else {
-                    // perhaps we should try to use the type annotation
-                    // to infer the types in the expressions
+                    decl->binding.type = binding.type = init_type;
+                    ++types_added;
                 }
                 push_var(binding.name, binding.type);
                 break;
@@ -1303,6 +1291,7 @@ static void type_and_check_exhaustively(DeclarationList* root)
                             dbgprint("adding new type constraint for param %s\n",
                                     param->name);
                             param->type = it->type = new_type_constraint();
+                            types_added++;
                         }
                     }
                 }
@@ -1314,10 +1303,11 @@ static void type_and_check_exhaustively(DeclarationList* root)
                     if (!it->type) have_type_of_params = 0;
                 }
 
-                TypeExpr* func_type = NULL;
-                if (have_type_of_params && bodytype) {
+                assert(have_type_of_params);
+                assert(bodytype->tag);
+                {
                     dbgtprintf("bodytype: %T\n", bodytype);
-                    func_type = bodytype;
+                    TypeExpr* func_type = bodytype;
                     for (struct Var* it = post_param_stack_ptr;
                             --it >= pre_param_stack_ptr; )
                     {
@@ -1335,22 +1325,18 @@ static void type_and_check_exhaustively(DeclarationList* root)
                             dbgtprintf("functype: %T\n", func_type);
                             types_added += theorise_equal(
                                     decl->func.type, func_type);
+                        } else {
+                            for (struct Var* it = post_param_stack_ptr;
+                                    --it >= pre_param_stack_ptr; )
+                            {
+                                TypeExpr* tmp = func_type;
+                                func_type = func_type->right;
+                                free((void*)tmp); // cast away const
+                            }
                         }
                     } else {
                         decl->func.type = func_type;
                         types_added++;
-                    }
-                    // TODO: ADD THIS TO FUNC_EXPR
-                } else if (decl->func.type) {
-                    // TODO: finish this
-                    // With our type var idea, we should do separate cases
-                    // for have_type_of_params and for have bodytype
-                    if (!decl->func.params->param->type) {
-                        if (decl->func.type->left) {
-                            decl->func.params->param->type
-                                = decl->func.type->left;
-                            types_added++;
-                        }
                     }
                 }
 
@@ -1396,8 +1382,19 @@ static void type_and_check_exhaustively(DeclarationList* root)
             if (constraint_theories[i]) {
                 dbgtprintf("constraint %d has theory %T\n", i,
                         constraint_theories[i]);
-                // Want to apply said theory to the tree and then type check it
+                // Want to apply said theory to the tree and
+                // then type check it
                 apply_theory(root, i, constraint_theories[i]);
+                // also need to apply the theory to the other theories that may
+                // reference us in the branches of a type
+                for (int j = 0; j < i; j++) {
+                    TypeExpr** theory_j = constraint_theories + j;
+                    if (*theory_j
+                            && type_uses_constraint(*theory_j, i)) {
+                        *theory_j = replaced_constraint(*theory_j, i,
+                                constraint_theories[i]);
+                    }
+                }
                 ++types_added; // avoid loop end
 
                 /*
@@ -1459,7 +1456,7 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
       case LESSTHAN:
       case LESSEQUAL:
       case APPLY:
-        if (!expr->type) {
+        if (!solid_type(expr->type)) {
             fprintf(stderr, EPFX"%s expr with no type\n", expr_name(expr->tag));
             print_binding_hierachy(stderr, hierachy);
             result = 0;
@@ -1468,7 +1465,7 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
         result &= check_if_fully_typed_expr(expr->right, hierachy);
         break;
       case VAR:
-        if (!expr->type) {
+        if (!solid_type(expr->type)) {
             fprintf(stderr, EPFX"var %s with no type\n", expr->var);
             print_binding_hierachy(stderr, hierachy);
             result = 0;
@@ -1481,7 +1478,7 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
         break;
       case FUNC_EXPR:
       {
-        if (!expr->func.functype) {
+        if (!solid_type(expr->func.functype)) {
             fprintf(stderr, EPFX"func %s with no type\n", expr->func.name);
             print_binding_hierachy(stderr, hierachy);
             result = 0;
@@ -1492,7 +1489,7 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
         result &= check_if_fully_typed_expr(expr->func.body, subhierachy);
         result &= check_if_fully_typed_expr(expr->func.subexpr, subhierachy);
         free(subhierachy);
-        if (!expr->type) {
+        if (!solid_type(expr->type)) {
             assert(result == 0); // better be covered by subexpr
         }
         break;
@@ -1503,14 +1500,14 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
         result &= check_if_fully_typed_expr(expr->binding.init, subhierachy);
         result &= check_if_fully_typed_expr(expr->binding.subexpr, subhierachy);
         free(subhierachy);
-        if (!expr->type) {
+        if (!solid_type(expr->type)) {
             assert(result == 0); // better be covered by subexpr
         }
         break;
       }
       case IF_EXPR:
       {
-        if (!expr->type) {
+        if (!solid_type(expr->type)) {
             fprintf(stderr, EPFX"if expression with no type\n");
             print_binding_hierachy(stderr, hierachy);
             result = 0;
@@ -1523,7 +1520,7 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
       case LIST:
       case VECTOR:
       {
-          if (!expr->type) {
+          if (!solid_type(expr->type)) {
               fprintf(stderr, EPFX"%s with no type\n", expr_name(expr->tag));
               print_binding_hierachy(stderr, hierachy);
               result = 0;
@@ -1554,7 +1551,7 @@ static _Bool check_if_fully_typed_root(DeclarationList* root)
           case DECL_FUNC:
           {
             SymList* hierachy = symbol_list(decl->func.name);
-            if (!decl->func.type) {
+            if (!solid_type(decl->func.type)) {
                 fprintf(stderr, EPFX"unable to deduce type of function %s\n",
                         decl->binding.name);
                 result = 0;
@@ -1566,7 +1563,7 @@ static _Bool check_if_fully_typed_root(DeclarationList* root)
           }
           case DECL_BIND:
           {
-            if (!decl->binding.type) {
+            if (!solid_type(decl->binding.type)) {
                 fprintf(stderr, EPFX"unable to deduce type of let binding %s\n",
                         decl->binding.name);
                 result = 0;

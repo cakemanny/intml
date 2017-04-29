@@ -37,6 +37,16 @@ expect_pass "let x = () = ()"   # comparing units is allowed!
 expect_fail "let x = () = 1"   # comparing ints and units is not!
 expect_fail "let x = 1 = ()"   # comparing ints and units is not!
 
+# if expressions
+# both branches must have same type
+expect_pass "let x = if 1 then 5 else 6"
+expect_fail "let x = if 1 then () else 1"
+expect_fail "let x = if 1 then 0 else ()"
+# type of if is the type of one of the branches
+expect_pass "let x = (if 1 then () else () : unit)"
+expect_pass "let x = (if 1 then 1 else 1 : int)"
+expect_fail "let x = (if 1 then () else () : int)"
+
 # deduce the type of the parameter from the expression it's used in
 expect_pass "let f x = x * 2"
 # And iteratively allow that function to impose it's type on another
