@@ -108,6 +108,7 @@ expect_fail "let x = [ 1 ] = [| 1 |]"
 expect_fail "let x :: y = []";
 expect_pass "let x :: y = [ 1 ]";
 expect_pass "let x :: y = [ 1 ; 2 ]";
+expect_pass "let head xs = let x::_ = xs in x  let y = head [1;2;3]"
 
 # type aliases
 expect_pass "type metre = int   let f (w:metre) (h:metre) = w * h / 2"

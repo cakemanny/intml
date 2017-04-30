@@ -627,32 +627,39 @@ static void pattern_match_and_push_vars(Pattern* pat, TypeExpr* init_type)
         }
         free(names);
 
+        init_type = deref_if_needed(init_type);
         // Now we need to have that either init_type is a list type or a
         // constraint type we can suggest is an
         if (init_type->tag == TYPE_CONSTRAINT) {
-            if (pat->type) {
-                // have pat type
-            } else if (pat->left->type) {
+            if (!pat->left->type) {
+                pat->left->type = new_type_constraint();
+            }
+            if (!pat->type) {
                 pat->type = typeconstructor(pat->left->type, symbol("list"));
-            } else {
-                TypeExpr* param_type = new_type_constraint();
-                pat->type = typeconstructor(param_type, symbol("list"));
-                pat->left->type = param_type;
             }
             theorise_equal(init_type, pat->type);
-        }
-        init_type = deref_if_needed(init_type);
-        if (init_type->tag == TYPE_CONSTRUCTOR) {
+            if (!pat->right->type) {
+                pat->right->type = pat->type;
+            }
+            pattern_match_and_push_vars(pat->left, pat->left->type);
+            pattern_match_and_push_vars(pat->right, pat->right->type);
+
+        } else if (init_type->tag == TYPE_CONSTRUCTOR) {
             if (init_type->constructor == symbol("list")) {
                 pattern_match_and_push_vars(pat->left, init_type->param);
                 pattern_match_and_push_vars(pat->right, init_type);
             } else {
-                // TODO
-                fprintf(stderr, EPFX"expected list type");
+                tprintf(stderr,
+                        EPFX"expected list type in init for pattern %P\n", pat);
+                TypeExpr* expected = typeconstructor(
+                        typename(symbol("'a")), symbol("list"));
+                print_type_error(expected, init_type);
+                free((void*)expected->param); // cast away const :'(
+                free((void*)expected);
                 exit(EXIT_FAILURE);
             }
-
         }
+
         if (pat->type) {
             typexpr_conforms_or_exit(pat->type, init_type,
                     "pattern %P in let binding", pat);
@@ -661,6 +668,7 @@ static void pattern_match_and_push_vars(Pattern* pat, TypeExpr* init_type)
         } else {
             pat->type = init_type;
         }
+        break;
       }
     }
 }
@@ -835,7 +843,6 @@ static int deducetype_expr(Expr* expr)
                 return 1;
             } else {
                 dbgprint("type of %s not known yet\n", expr->var);
-                // TODO: assign new type constraint!
                 expr->type = found_var->type = new_type_constraint();
                 return 0;
             }
