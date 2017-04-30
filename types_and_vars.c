@@ -326,13 +326,31 @@ static TypeExpr* replaced_constraint(
 /*
  * Replace the uses of type variables with given constraint_id with theory
  */
-static void apply_theory_params(ParamList* params, int constraint_id, TypeExpr* theory)
+static void apply_theory_params(
+        ParamList* params, int constraint_id, TypeExpr* theory)
 {
     for (; params; params = params->next) {
         Param* p = params->param;
         if (type_uses_constraint(p->type, constraint_id)) {
             p->type = replaced_constraint(p->type, constraint_id, theory);
         }
+    }
+}
+
+static void apply_theory_pat(Pattern* pat, int constraint_id, TypeExpr* theory)
+{
+    if (type_uses_constraint(pat->type, constraint_id)) {
+        pat->type = replaced_constraint(pat->type, constraint_id, theory);
+    }
+    switch (pat->tag)
+    {
+      case PAT_VAR:
+      case PAT_DISCARD:
+        break;
+      case PAT_CONS:
+        apply_theory_pat(pat->left, constraint_id, theory);
+        apply_theory_pat(pat->right, constraint_id, theory);
+        break;
     }
 }
 
@@ -372,6 +390,7 @@ static void apply_theory_expr(Expr* expr, int constraint_id, TypeExpr* theory)
         }
         break;
       case BIND_EXPR:
+        apply_theory_pat(expr->binding.pattern, constraint_id, theory);
         apply_theory_expr(expr->binding.init, constraint_id, theory);
         apply_theory_expr(expr->binding.subexpr, constraint_id, theory);
         break;
@@ -409,6 +428,7 @@ static void apply_theory(
                   replaced_constraint(decl->binding.type,
                           constraint_id, theory);
             }
+            apply_theory_pat(decl->binding.pattern, constraint_id, theory);
             apply_theory_expr(decl->binding.init, constraint_id, theory);
             break;
           }
@@ -431,7 +451,7 @@ static void apply_theory(
  * Attempt to add a theory that these types are equal. Which we will later
  * try to unify
  */
-__attribute__((warn_unused_result))
+//__attribute__((warn_unused_result))
 static int theorise_equal(TypeExpr* etype, TypeExpr* newtype)
 {
     switch (etype->tag) {
@@ -531,11 +551,119 @@ static const char* expr_name(enum ExprTag tag)
             TypeExpr* __et = (ET);                              \
             TypeExpr* __at = (AT);                              \
             if (!typexpr_conforms_to(__et, __at)) {             \
-                fprintf(stderr, EPFX M "\n", ##__VA_ARGS__);    \
+                tprintf(stderr, EPFX M "\n", ##__VA_ARGS__);    \
                 print_type_error(__et, __at);                   \
                 exit(EXIT_FAILURE);                             \
             }                                                   \
         } while (0)
+
+static int count_names_pat(Pattern* pat)
+{
+    switch (pat->tag)
+    {
+      case PAT_VAR: return 1;
+      case PAT_DISCARD: return 0;
+      case PAT_CONS: return count_names_pat(pat->left)
+                     + count_names_pat(pat->right);
+    }
+}
+static void add_names_to_array_pat(Pattern* pat, Symbol** ptr_next)
+{
+    switch (pat->tag)
+    {
+      case PAT_VAR: *(*ptr_next)++ = pat->name; return;
+      case PAT_DISCARD: return;
+      case PAT_CONS:
+        add_names_to_array_pat(pat->left, ptr_next);
+        add_names_to_array_pat(pat->right, ptr_next);
+        return;
+    }
+}
+
+static void pattern_match_and_push_vars(Pattern* pat, TypeExpr* init_type)
+{
+    switch (pat->tag)
+    {
+      case PAT_VAR:
+      {
+        if (pat->type) {
+            typexpr_conforms_or_exit(pat->type, init_type,
+                    "name %s in let binding", pat->name);
+            theorise_equal(pat->type, init_type);
+            theorise_equal(init_type, pat->type);
+        } else {
+            pat->type = init_type; // types_added++?
+        }
+        push_var(pat->name, init_type);
+        break;
+      }
+      case PAT_DISCARD:
+      {
+        if (pat->type) {
+            typexpr_conforms_or_exit(pat->type, init_type, "_ in let binding");
+            theorise_equal(pat->type, init_type);
+            theorise_equal(init_type, pat->type);
+        } else {
+            pat->type = init_type; //types_added++?
+        }
+        break;
+      }
+      case PAT_CONS:
+      {
+        // Check for duplicate names
+        int num_names = count_names_pat(pat);
+        Symbol* names = malloc(num_names * sizeof *names);
+        if (!names) { perror("OOM"); abort(); }
+        Symbol* end = names;
+        add_names_to_array_pat(pat, &end);
+        for (Symbol* it = names; it < end - 1; ++it) {
+            for (Symbol* it2 = it + 1; it2 < end; ++it2) {
+                if (*it == *it2) {
+                    fprintf(stderr, EPFX"variable %s bound twice in pattern\n",
+                            *it);
+                    exit(EXIT_FAILURE);
+                }
+            }
+        }
+        free(names);
+
+        // Now we need to have that either init_type is a list type or a
+        // constraint type we can suggest is an
+        if (init_type->tag == TYPE_CONSTRAINT) {
+            if (pat->type) {
+                // have pat type
+            } else if (pat->left->type) {
+                pat->type = typeconstructor(pat->left->type, symbol("list"));
+            } else {
+                TypeExpr* param_type = new_type_constraint();
+                pat->type = typeconstructor(param_type, symbol("list"));
+                pat->left->type = param_type;
+            }
+            theorise_equal(init_type, pat->type);
+        }
+        init_type = deref_if_needed(init_type);
+        if (init_type->tag == TYPE_CONSTRUCTOR) {
+            if (init_type->constructor == symbol("list")) {
+                pattern_match_and_push_vars(pat->left, init_type->param);
+                pattern_match_and_push_vars(pat->right, init_type);
+            } else {
+                // TODO
+                fprintf(stderr, EPFX"expected list type");
+                exit(EXIT_FAILURE);
+            }
+
+        }
+        if (pat->type) {
+            typexpr_conforms_or_exit(pat->type, init_type,
+                    "pattern %P in let binding", pat);
+            theorise_equal(pat->type, init_type);
+            theorise_equal(init_type, pat->type);
+        } else {
+            pat->type = init_type;
+        }
+      }
+    }
+}
 
 static int deducetype_expr(Expr* expr)
 {
@@ -866,10 +994,12 @@ static int deducetype_expr(Expr* expr)
         int types_added = deducetype_expr(expr->binding.init);
         TypeExpr* init_type = expr->binding.init->type;
         assert(init_type->tag);
-        dbgtprintf("deduced type for %s: %T\n", expr->binding.name, init_type);
+        dbgtprintf("deduced type for pattern %P: %T\n", expr->binding.pattern,
+                init_type);
 
         struct Var* saved_stack_ptr = var_stack_ptr;
-        push_var(expr->binding.name, init_type);
+        //push_var(expr->binding.name, init_type);
+        pattern_match_and_push_vars(expr->binding.pattern, init_type);
 
         types_added += deducetype_expr(expr->binding.subexpr);
         TypeExpr* subexprtype = expr->binding.subexpr->type;
@@ -877,8 +1007,8 @@ static int deducetype_expr(Expr* expr)
         assert(subexprtype->tag);
         if (expr->type) {
             typexpr_conforms_or_exit(subexprtype, expr->type,
-                    "conflicting types for expression following "
-                    "binding of %s ", expr->binding.name);
+                    "conflicting types for expression following binding of %P",
+                    expr->binding.pattern);
             types_added += theorise_equal(expr->type, subexprtype);
             types_added += theorise_equal(subexprtype, expr->type);
         } else {
@@ -987,23 +1117,50 @@ static int deducetype_expr(Expr* expr)
     abort(); // Shouldn't be possible to get here
 }
 
+__pure static _Bool declares_name_pat(Pattern* pat, Symbol name)
+{
+    switch (pat->tag) {
+      case PAT_VAR: return pat->name == name;
+      case PAT_DISCARD: return 0;
+      case PAT_CONS: return declares_name_pat(pat->left, name)
+                     || declares_name_pat(pat->right, name);
+    }
+}
+
 /*
  * A helper function for accessing the name of any of the declaration types
  */
-__pure static Symbol decl_name(Declaration* declaration)
+__pure static _Bool declares_name(Declaration* declaration, Symbol name)
 {
     switch (declaration->tag) {
-        case DECL_FUNC: return declaration->func.name;
-        case DECL_BIND: return declaration->binding.name;
-        case DECL_TYPE: return declaration->type.name;
+        case DECL_FUNC: return declaration->func.name == name;
+        case DECL_BIND: return declares_name_pat(declaration->binding.pattern, name);
+        case DECL_TYPE: return declaration->type.name == name;
     }
     abort();
 }
-__pure static TypeExpr** decl_type_ptr(Declaration* declaration)
+__pure static TypeExpr** decl_type_ptr_pat(Pattern* pat, Symbol name)
+{
+    switch (pat->tag) {
+        case PAT_VAR:
+            if (name == pat->name) return &pat->type;
+            else return NULL;
+        case PAT_DISCARD:
+            return NULL;
+        case PAT_CONS:
+        {
+            TypeExpr** left_type = decl_type_ptr_pat(pat->left, name);
+            if (left_type) return left_type;
+            else return decl_type_ptr_pat(pat->right, name);
+        }
+    }
+}
+__pure static TypeExpr** decl_type_ptr(Declaration* declaration, Symbol name)
 {
     switch (declaration->tag) {
         case DECL_FUNC: return &declaration->func.type;
-        case DECL_BIND: return &declaration->binding.type;
+        case DECL_BIND: return decl_type_ptr_pat(
+                                declaration->binding.pattern, name);
                         // chances are we don't want this case:
         case DECL_TYPE: return &declaration->type.definition;
     }
@@ -1014,9 +1171,9 @@ __pure static TypeExpr** decl_type_ptr(Declaration* declaration)
  * Note, the type of a type declaration doesn't really fit the semantics of
  * the other types of declarations
  */
-__pure static TypeExpr* decl_type(Declaration* declaration)
+__pure static TypeExpr* decl_type(Declaration* declaration, Symbol name)
 {
-    return *decl_type_ptr(declaration);
+    return *decl_type_ptr(declaration, name);
 }
 
 static void type_and_check_exhaustively(DeclarationList* root)
@@ -1041,24 +1198,25 @@ static void type_and_check_exhaustively(DeclarationList* root)
               case DECL_BIND:
               {
                 Binding binding = decl->binding;
-                dbgprint("deducing type for toplevel binding %s\n", binding.name);
+                dbgtprintf("deducing type for toplevel binding %P\n",
+                        binding.pattern);
                 types_added += deducetype_expr(binding.init);
                 TypeExpr* init_type = binding.init->type;
 
                 assert(init_type->tag);
-                dbgtprintf("deduced type %s: %T\n", binding.name, init_type);
+                dbgtprintf("deduced type %P: %T\n", binding.pattern, init_type);
                 if (binding.type) {
                     typexpr_conforms_or_exit(binding.type, init_type,
                             "type annotation does not matched "
-                            "deduced type for toplevel binding %s",
-                            binding.name);
+                            "deduced type for toplevel binding %P",
+                            binding.pattern);
                     types_added += theorise_equal(binding.type, init_type);
                     types_added += theorise_equal(init_type, binding.type);
                 } else {
                     decl->binding.type = binding.type = init_type;
                     ++types_added;
                 }
-                push_var(binding.name, binding.type);
+                pattern_match_and_push_vars(binding.pattern, binding.type);
                 break;
               }
               case DECL_FUNC:
@@ -1172,20 +1330,20 @@ static void type_and_check_exhaustively(DeclarationList* root)
             for (DeclarationList* c = root; c; c = c->next) {
                 for (struct Var* it = saved_stack_ptr; it != var_stack_ptr; ++it) {
                     Declaration* decl = c->declaration;
-                    if (it->name == decl_name(decl)) {
+                    if (declares_name(decl, it->name)) {
                         fprintf(stderr, "** %s\n", it->name);
                         fprintf(stderr, "  stacktype: ");
                         if (it->type) print_typexpr(stderr, it->type);
                         else fputs("(null)", stderr);
                         fprintf(stderr, "\n  tree type: ");
-                        if (decl_type(decl))
-                            print_typexpr(stderr, decl_type(decl));
+                        if (decl_type(decl, it->name))
+                            print_typexpr(stderr, decl_type(decl, it->name));
                         else fputs("(null)", stderr);
                         fputs("\n", stderr);
 
-                        if (it->type && !decl_type(decl)) {
+                        if (it->type && !decl_type(decl, it->name)) {
                             assert(decl->tag != DECL_TYPE);
-                            *decl_type_ptr(decl) = it->type;
+                            *decl_type_ptr(decl, it->name) = it->type;
                         }
                     }
                 }
@@ -1249,11 +1407,32 @@ static void print_binding_hierachy(FILE* out, SymList* hierachy)
     }
 }
 
+static _Bool check_if_fully_typed_pattern(Pattern* pat, SymList* hierachy)
+{
+    _Bool result = 1;
+    if (!solid_type(pat->type)) {
+        fprintf(stderr, EPFX"unable to determine type of binding %s\n",
+                pat->name);
+        print_binding_hierachy(stderr, hierachy);
+        result = 0;
+    }
+    switch (pat->tag) {
+      case PAT_VAR:
+      case PAT_DISCARD:
+        break;
+      case PAT_CONS:
+        result &= check_if_fully_typed_pattern(pat->left, hierachy);
+        result &= check_if_fully_typed_pattern(pat->right, hierachy);
+        break;
+    }
+    return result;
+}
+
 static _Bool check_if_fully_typed_params(ParamList* params, SymList* hierachy)
 {
     _Bool result = 1;
     for (ParamList* c = params; c; c = c->next) {
-        if (!c->param->type) {
+        if (!solid_type(c->param->type)) {
             fprintf(stderr, EPFX"unable to determine type of parameter %s\n",
                     c->param->name);
             print_binding_hierachy(stderr, hierachy);
@@ -1371,7 +1550,7 @@ static _Bool check_if_fully_typed_root(DeclarationList* root)
             SymList* hierachy = symbol_list(decl->func.name);
             if (!solid_type(decl->func.type)) {
                 fprintf(stderr, EPFX"unable to deduce type of function %s\n",
-                        decl->binding.name);
+                        decl->func.name);
                 result = 0;
             }
             result &= check_if_fully_typed_params(decl->func.params, hierachy);
@@ -1382,13 +1561,20 @@ static _Bool check_if_fully_typed_root(DeclarationList* root)
           case DECL_BIND:
           {
             if (!solid_type(decl->binding.type)) {
-                fprintf(stderr, EPFX"unable to deduce type of let binding %s\n",
-                        decl->binding.name);
+                tprintf(stderr, EPFX"unable to deduce type of let binding %P\n",
+                        decl->binding.pattern);
                 result = 0;
             }
-            SymList* hierachy = symbol_list(decl->func.name);
-            result &= check_if_fully_typed_expr(decl->binding.init, hierachy);
-            free(hierachy);
+            if (decl->binding.pattern->tag == PAT_VAR) {
+                SymList* hierachy = symbol_list(decl->binding.pattern->name);
+                result &= check_if_fully_typed_pattern(decl->binding.pattern, hierachy);
+                result &= check_if_fully_typed_expr(decl->binding.init, hierachy);
+                free(hierachy);
+            } else {
+                // TODO: Need another way of recording the hierachy
+                result &= check_if_fully_typed_pattern(decl->binding.pattern, NULL);
+                result &= check_if_fully_typed_expr(decl->binding.init, NULL);
+            }
             break;
           }
         }
@@ -1434,8 +1620,8 @@ void check_runtime_properties(DeclarationList* root)
     for (DeclarationList* c = root; c; c = c->next)
     {
         Declaration* decl = c->declaration;
-        if (decl_name(decl) == symbol("main")) {
-            if (typexpr_equals(decl_type(decl), main_type)) {
+        if (declares_name(decl, symbol("main"))) {
+            if (typexpr_equals(decl_type(decl, symbol("main")), main_type)) {
                 switch (decl->tag) {
                   case DECL_FUNC: return;
                   case DECL_BIND: return;
@@ -1443,7 +1629,7 @@ void check_runtime_properties(DeclarationList* root)
                 }
             } else if (decl->tag != DECL_TYPE) {
                 fprintf(stderr, EPFX"main has incorrect type\n");
-                print_type_error(main_type, decl_type(decl));
+                print_type_error(main_type, decl_type(decl, symbol("main")));
             }
         }
     }

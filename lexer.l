@@ -97,9 +97,10 @@ else            { return ELSE; }
  /* punctuation */
 "->"            { return ARROW; }
 "<="            { return LE; }
+"::"            { return CONS; }
 "[|"            { return VSTART; }  /* vectors (not arrays) */
 "|]"            { return VEND; }
-[-+*/=<=():\[\];]       { return yytext[0]; }
+[-+*/=<=():\[\];_,]     { return yytext[0]; }
 
 {WS}            ; /* Drop whitespace */
 [\n]            { ++yylineno; }

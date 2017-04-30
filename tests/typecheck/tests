@@ -104,6 +104,11 @@ expect_pass "let x = ([| |] : string vector)"
 expect_fail "let x = [] = [||]"
 expect_fail "let x = [ 1 ] = [| 1 |]"
 
+#pattern matching
+expect_fail "let x :: y = []";
+expect_pass "let x :: y = [ 1 ]";
+expect_pass "let x :: y = [ 1 ; 2 ]";
+
 # type aliases
 expect_pass "type metre = int   let f (w:metre) (h:metre) = w * h / 2"
 expect_pass "type intfunc = int -> int  let apply (f:intfunc) x = f x"

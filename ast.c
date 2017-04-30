@@ -65,15 +65,16 @@ Declaration* func(Symbol name, ParamList* params, Expr* body)
     return result;
 }
 
-Declaration* binding(Symbol name, Expr* init)
+Declaration* binding(Pattern* pattern, Expr* init)
 {
     Declaration* result = xmalloc(sizeof *result);
     result->tag = DECL_BIND;
-    result->binding.name = name;
+    result->binding.pattern = pattern;
     result->binding.init = init;
     result->binding.type = NULL;
     return result;
 }
+
 
 Declaration* type(Symbol name, TypeExpr* definition)
 {
@@ -225,11 +226,11 @@ Expr* local_func(Symbol name, ParamList* params, Expr* body, Expr* subexpr)
     return result;
 }
 
-Expr* local_binding(Symbol name, Expr* init, Expr* subexpr)
+Expr* local_binding(Pattern* pattern, Expr* init, Expr* subexpr)
 {
     Expr* result = expr(BIND_EXPR);
     BindExpr* bind = &result->binding;
-    bind->name = name;
+    bind->pattern = pattern;
     bind->init = init;
     bind->subexpr = subexpr;
 
@@ -339,6 +340,32 @@ TypeExpr* typeconstructor(TypeExpr* param, Symbol constructor)
     return result;
 }
 
+static struct Pattern* pat(enum PatternTag tag)
+{
+    struct Pattern* result = xmalloc(sizeof *result);
+    result->tag = tag;
+    result->type = NULL; /* worked out later in type checker */
+    return result;
+}
+Pattern* pat_var(Symbol name)
+{
+    struct Pattern* result = pat(PAT_VAR);
+    result->name = name;
+    return result;
+}
+
+Pattern* pat_discard()
+{
+    return pat(PAT_DISCARD);
+}
+
+Pattern* pat_list(Pattern* head, Pattern* tail)
+{
+    struct Pattern* result = pat(PAT_CONS);
+    result->left = head;
+    result->right = tail;
+    return result;
+}
 
 /*----------------------------------------*\
  * Fns for printing the AST               *
@@ -404,6 +431,28 @@ void print_exprlist(FILE* out, const ExprList* list)
     fputc(')', out);
 }
 
+void print_pattern(FILE* out, const Pattern* pat)
+{
+    fputs("(pattern ", out);
+    switch (pat->tag) {
+        case PAT_VAR:
+            fprintf(out, "%s", pat->name);
+            break;
+        case PAT_DISCARD:
+            fputc('_', out);
+            break;
+        case PAT_CONS:
+        {
+            fputs("cons ", out);
+            print_pattern(out, pat->left);
+            fputc(' ', out);
+            print_pattern(out, pat->right);
+            break;
+        }
+    }
+    fputc(')', out);
+}
+
 void print_expr(FILE* out, const Expr* expr)
 {
     fputc('(', out);
@@ -450,7 +499,9 @@ void print_expr(FILE* out, const Expr* expr)
         print_expr(out, expr->func.subexpr);
         break;
     case BIND_EXPR:
-        fprintf(out, "let %s ", expr->binding.name);
+        fprintf(out, "let ");
+        print_pattern(out, expr->binding.pattern);
+        fputc(' ', out);
         print_expr(out, expr->binding.init);
         fputs(" 'in ", out);
         print_expr(out, expr->binding.subexpr);
@@ -494,7 +545,9 @@ void print_declaration(FILE* out, const Declaration* decl)
         print_expr(out, decl->func.body);
         break;
     case DECL_BIND:
-        fprintf(out, "let %s ", decl->binding.name);
+        fputs("let ", out);
+        print_pattern(out, decl->binding.pattern);
+        fputc(' ', out);
         print_expr(out, decl->binding.init);
         break;
     case DECL_TYPE:
@@ -528,7 +581,8 @@ int tp_count(const char* fmt)
             switch (c) {
                 case 'd':
                 case 's':
-                case 'T': nargs++;
+                case 'T':
+                case 'P': nargs++;
                 case '%': break;
                 case '\0': --cp; break;
                 default: assert(0 && "need to add another fmt specifier");
@@ -576,6 +630,13 @@ void tprintfx(FILE* out, const char* fmt, int nargs, ...)
                 {
                     funlockfile(out); // not sure if re-entrant
                     print_typexpr(out, va_arg(valist, TypeExpr*));
+                    flockfile(out); // not sure if re-entrant
+                    break;
+                }
+                case 'P':
+                {
+                    funlockfile(out); // not sure if re-entrant
+                    print_pattern(out, va_arg(valist, Pattern*));
                     flockfile(out); // not sure if re-entrant
                     break;
                 }

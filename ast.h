@@ -12,6 +12,7 @@ struct Binding;
 struct Type;
 struct ParamList;
 struct Param;
+struct Pattern;
 struct Expr;
 struct FuncExpr;
 struct BindExpr;
@@ -26,6 +27,7 @@ typedef struct Binding Binding;
 typedef struct Type Type;
 typedef struct ParamList ParamList;
 typedef struct Param Param;
+typedef struct Pattern Pattern;
 typedef struct Expr Expr;
 typedef struct FuncExpr FuncExpr;
 typedef struct BindExpr BindExpr;
@@ -48,7 +50,7 @@ struct Func {
 };
 
 struct Binding {
-    Symbol name;
+    Pattern* pattern;
     Expr* init;
 
     TypeExpr* type;
@@ -104,7 +106,7 @@ struct FuncExpr {
 };
 
 struct BindExpr {
-    Symbol name;
+    Pattern* pattern;
     Expr* init;
     Expr* subexpr;
 
@@ -172,7 +174,7 @@ struct TypeExpr {
     } tag;
     union {
         Symbol name;
-        struct { /* typearrow, type_tuple */
+        struct { /* typearrow */
             TypeExpr* left;
             TypeExpr* right;
         };
@@ -183,6 +185,22 @@ struct TypeExpr {
             Symbol constructor;
         };
     };
+};
+
+struct Pattern {
+    enum PatternTag {
+        PAT_VAR = 1,
+        PAT_DISCARD,
+        PAT_CONS,
+    } tag;
+    union {
+        Symbol name; /* PAT_VAR */
+        struct {
+            Pattern* left;  /* CONS */
+            Pattern* right;
+        };
+    };
+    TypeExpr* type;
 };
 
 /*
@@ -239,7 +257,7 @@ Declaration* func(Symbol name, ParamList* params, Expr* body);
 /*
  * Create a global binding node
  */
-Declaration* binding(Symbol name, Expr* init);
+Declaration* binding(Pattern* pattern, Expr* init);
 
 /*
  * Creates a type declaration node
@@ -319,7 +337,7 @@ Expr* local_func(Symbol name, ParamList* params, Expr* body, Expr* subexpr);
  * Creates a local variable binding and subexpression node which uses
  * the binding
  */
-Expr* local_binding(Symbol name, Expr* init, Expr* subexpr);
+Expr* local_binding(Pattern* pattern, Expr* init, Expr* subexpr);
 
 /*
  * Creates a if-then-else expression node
@@ -385,5 +403,15 @@ TypeExpr* typetuple(TypeExpr* left, TypeExpr* right);
  * e.g. int list or string list
  */
 TypeExpr* typeconstructor(TypeExpr* param, Symbol constrname);
+
+/*
+ * Create a value-name pattern
+ */
+Pattern* pat_var(Symbol name);
+
+Pattern* pat_discard();
+
+Pattern* pat_list(Pattern* head, Pattern* tail);
+
 
 #endif // __AST_H__

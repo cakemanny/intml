@@ -715,7 +715,11 @@ static void gen_stack_machine_code(Expr* expr)
             }
 
             Var* saved_stack_ptr = var_stack_ptr;
-            push_var(binding->name, binding->init->type);
+            if (binding->pattern->tag == PAT_VAR) {
+                push_var(binding->pattern->name, binding->init->type);
+            } else {
+                assert(0 && "TODO: other pattern types");
+            }
             gen_stack_machine_code(binding->subexpr);
             var_stack_ptr = saved_stack_ptr;
             break;
@@ -944,7 +948,11 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
       {
         calculate_activation_records_expr(expr->binding.init, curr_func);
         Var* saved_stack_ptr = var_stack_ptr;
-        add_var_to_locals(curr_func, expr->binding.name, expr->binding.init->type);
+        if (expr->binding.pattern->tag == PAT_VAR) {
+            add_var_to_locals(curr_func, expr->binding.pattern->name, expr->binding.init->type);
+        } else {
+            assert(0 && "TODO: patterns in codegen");
+        }
         expr->binding.var_id = (var_stack_ptr - 1)->var_id;
 
         calculate_activation_records_expr(expr->binding.subexpr, curr_func);
@@ -1074,7 +1082,7 @@ Expr* restructure_tree(DeclarationList* root)
           case DECL_BIND:
           {
               Expr* newnode = local_binding(
-                      decl->binding.name,
+                      decl->binding.pattern,
                       decl->binding.init,
                       restructure_tree(root->next));
               newnode->type = newnode->binding.subexpr->type;

@@ -25,6 +25,7 @@ static DeclarationList* tree = NULL;
     Declaration*        declaration;
     Expr*               expr;
     ExprList*           exprs;
+    Pattern*            pattern;
     ParamList*          params;
     Param*              param;
     TypeExpr*           typexpr;
@@ -47,6 +48,7 @@ static DeclarationList* tree = NULL;
 
 %type <declarations> program declarations
 %type <declaration> declaration letdecl typedecl
+%type <pattern> pattern
 %type <params> params
 %type <param> param
 %type <exprs> exprlist nonemptylist
@@ -58,8 +60,8 @@ static DeclarationList* tree = NULL;
 %nonassoc '[' ']' VSTART VEND
 %right ';'
 %nonassoc IF THEN ELSE
-%left '='       /* right in assignments but left in expressions */
 %nonassoc ','
+%left '='       /* right in assignments but left in expressions */
 %nonassoc '<' LE
 %right CONS
 %left '+' '-'
@@ -83,8 +85,14 @@ declaration:
   | typedecl                    { $$ = $1; }
   ;
 letdecl:
-    LET ID '=' expr             { $$ = binding($2, $4); }
+    LET pattern '=' expr        { $$ = binding($2, $4); }
   | LET ID params '=' expr      { $$ = func($2, reverse_params($3), $5); }
+  ;
+pattern:
+    ID                          { $$ = pat_var($1); }
+  | '(' pattern ')'             { $$ = $2; }
+  | '_'                         { $$ = pat_discard(); }
+  | pattern CONS pattern        { $$ = pat_list($1, $3); }
   ;
 params:
     params param                { $$ = add_param($1, $2); }
@@ -126,7 +134,7 @@ letexpr:
     {
       $$ = local_func($2, reverse_params($3), $5, $7);
     }
-  | LET ID '=' expr IN expr
+  | LET pattern '=' expr IN expr
     {
       $$ = local_binding($2, $4, $6);
     }
@@ -147,7 +155,7 @@ typexpr:
      * clear up ambiguities in the grammar
      */
     typeterm ARROW typexpr  { $$ = typearrow($1, $3); }
-  | typeterm '*' typexpr    { $$ = typetuple($1, $3);  }
+  | typexpr '*' typeterm    { $$ = typetuple($1, $3);  }
   | typexpr ID              { $$ = typeconstructor($1, $2); }
   | typeterm                { $$ = $1; }
 typeterm:
