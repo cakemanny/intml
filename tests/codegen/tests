@@ -21,6 +21,9 @@ expect ./simple2 10
 expect ./simple4 11
 expect ./simple5 30
 expect ./complex0 210
+expect ./lists0 3
+expect ./lists1 4
+expect ./lists2 3
 
 # Exit with the number of failing tests
 exit $exitcode

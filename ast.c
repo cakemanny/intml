@@ -233,8 +233,6 @@ Expr* local_binding(Pattern* pattern, Expr* init, Expr* subexpr)
     bind->pattern = pattern;
     bind->init = init;
     bind->subexpr = subexpr;
-
-    bind->var_id = -1;  /* assigned by codegen */
     return result;
 }
 
@@ -351,6 +349,8 @@ Pattern* pat_var(Symbol name)
 {
     struct Pattern* result = pat(PAT_VAR);
     result->name = name;
+
+    result->var_id = -1; /* assigned by codegen */
     return result;
 }
 

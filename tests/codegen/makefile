@@ -19,6 +19,7 @@ ifeq "$(OS)" "Windows_NT"
 endif
 
 TARGETS := simple0 simple1 simple1.5 simple2 simple3 simple4 simple5 complex0
+TARGETS += lists0 lists1 lists2
 TARGETS := $(addsuffix $(SUFF),$(TARGETS))
 
 .PHONY: test

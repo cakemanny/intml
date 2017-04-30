@@ -109,8 +109,6 @@ struct BindExpr {
     Pattern* pattern;
     Expr* init;
     Expr* subexpr;
-
-    int var_id;
 };
 
 struct Expr {
@@ -194,7 +192,10 @@ struct Pattern {
         PAT_CONS,
     } tag;
     union {
-        Symbol name; /* PAT_VAR */
+        struct {
+            Symbol name; /* PAT_VAR */
+            int var_id; // used for tagging in codgen
+        };
         struct {
             Pattern* left;  /* CONS */
             Pattern* right;

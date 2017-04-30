@@ -183,6 +183,21 @@ static void push_var(Symbol name, TypeExpr* type)
     assert(type != NULL); // We should be fully typed at this point
     *var_stack_ptr++ = (Var){ .name = name, .type = type, .var_id = -1 };
 }
+static void push_vars_pat(Pattern* pat)
+{
+    switch (pat->tag)
+    {
+      case PAT_VAR:
+        push_var(pat->name, pat->type);
+        break;
+      case PAT_DISCARD:
+        break;
+      case PAT_CONS:
+        push_vars_pat(pat->left);
+        push_vars_pat(pat->right);
+        break;
+    }
+}
 
 /*
  * Find a variable declaration only in current function
@@ -260,6 +275,8 @@ static void add_var_to_locals(Function* func, Symbol name, TypeExpr* type)
 typedef const char* reg;
 static reg r0 = "%rax";
 static reg r1 = "%rdi"; // first argument or second word of return
+static reg r2 = "%rsi";
+static reg r3 = "%rdx";
 static reg t0 = "%r10";
 static reg t1 = "%r11";
 static reg sp = "%rsp";
@@ -267,6 +284,14 @@ static reg bp = "%rbp";
 static inline void ins2(const char* instr, const char* lop, const char* rop)
 {
     fprintf(cgenout, "\t%s\t%s, %s\n", instr, lop, rop);
+}
+static inline void ins2_imm(const char* instr, long long immval, const char* rop)
+{
+#ifdef _WIN32
+    fprintf(cgenout,"\t%s\t$%I64d, %s\n", instr, immval, rop);
+#else
+    fprintf(cgenout,"\t%s\t$%lld, %s\n", instr, immval, rop);
+#endif
 }
 static inline void ins1(const char* instr, const char* op)
 {
@@ -286,6 +311,10 @@ static void add(reg dst, reg op1, reg op2)
         ins2("movq", op1, dst);
         ins2("addq", op2, dst);
     }
+}
+static inline void add_imm(reg dst, long long amount)
+{
+    ins2_imm("addq", amount, dst);
 }
 static void mul(reg dst, reg op1, reg op2)
 {
@@ -310,6 +339,10 @@ static void sub(reg dst, reg minuend, reg amount)
         ins2("subq", amount, dst);
     }
 }
+static inline void sub_imm(reg dst, long long amount)
+{
+    ins2_imm("subq", amount, dst);
+}
 // load but with a comment to help debugging
 static void loadc(reg dst, reg src, int off, const char* comment)
 {
@@ -323,11 +356,7 @@ static void store(int off, reg dst, reg src)
 }
 static void mov_imm(reg dst, long long intval)
 {
-#ifdef _WIN32
-    fprintf(cgenout,"\tmovq\t$%I64d, %s\n", intval, dst);
-#else
-    fprintf(cgenout,"\tmovq\t$%lld, %s\n", intval, dst);
-#endif
+    ins2_imm("movq", intval, dst);
 }
 static void mov(reg dst, reg src)
 {
@@ -443,6 +472,7 @@ static int argument_offset(Function* func)
     return closure_offset(func) - WORD_SIZE;
 }
 
+__attribute__((malloc))
 static char* function_label(Function* func)
 {
     char* pfn;
@@ -465,11 +495,11 @@ static void emit_fn_prologue(Function* func)
 ", cgenout);
     fprintf(cgenout, "\tsubq\t$%d, %s\n", stack_required(func), sp);
     // Move ptr to closure into stack location
-    store(closure_offset(func), bp, "%rdi");
+    store(closure_offset(func), bp, r1);
     if (stack_size_of_type(func->type->left) > 0) {
-        store(argument_offset(func), bp, "%rsi");
+        store(argument_offset(func), bp, r2);
         if (stack_size_of_type(func->type->left) > WORD_SIZE) {
-            store(argument_offset(func) - WORD_SIZE, bp, "%rdx");
+            store(argument_offset(func) - WORD_SIZE, bp, r3);
         }
     }
 }
@@ -486,8 +516,93 @@ static void emit_fn_epilogue(Function* func)
 /*----------------------------------------`
 | Tree walk code gen                      |
 `----------------------------------------*/
-
 static void gen_stack_machine_code(Expr* expr);
+
+static void gen_list_from_end(ExprList* list, int list_stack_size)
+{
+    assert(list_stack_size == 2 * WORD_SIZE); // just for time being
+    if (list->next) {
+        // put the head of the end of the list on the stack
+        gen_list_from_end(list->next, list_stack_size);
+        // Save the generated value on the stack...
+        push(r1);
+        push(r0);
+        // allocate memory to save the data
+        alloc(list_stack_size); // == 2 * WORD_SIZE atm
+        pop(t0);
+        pop(t1);
+        // copy the data to memory
+        store(0, r0, t0);
+        store(WORD_SIZE, r0, t1);
+    } else {
+        mov_imm(r0, 0LL); // nil
+    }
+    push(r0); // save address of tail
+    sub_imm(sp, WORD_SIZE);
+    gen_stack_machine_code(list->expr); // result now in r0, r1, ...
+    // ASSUMING elem size == WORD_SIZE
+    mov(r1, r0); // data goes into word 2
+    add_imm(sp, WORD_SIZE);  // return stack pointer to point at our prev r0
+    pop(r0); // the address of the tail. DONE
+}
+
+/*
+ * Given the result of an expression on the stack, decompose and extract the
+ * values into the stack locations for the variables as declared in the
+ * function information
+ */
+static void gen_sm_unapply_pat(Pattern* pat)
+{
+    switch (pat->tag)
+    {
+      case PAT_VAR:
+      {
+        const VarEx var = variable_table[pat->var_id];
+        switch (var.size) { // These are meant to fall through
+          case 2 * WORD_SIZE:   store(-var.stack_offset - WORD_SIZE, bp, r1);
+          case WORD_SIZE:       store(-var.stack_offset, bp, r0); // Store r0 into stack
+          case 0:               break;
+          default:
+            assert(0 && "TODO: deal with larger variables");
+            break;
+        }
+      }
+      case PAT_DISCARD:
+        break;
+      case PAT_CONS:
+      {
+        // We must have either an empty list or non-empty list in result
+        // position. Assume non-empty
+
+        /* Think func list
+         * Current we have: [ rax, rdi, rsi ] = [ pnext, w1, w2 ]
+         * But PAT_VAR will expect: [ rax, rdi ] = [ w1, w2 ]
+         */
+        // Save pnext on stack
+        push(r0); // don't worry about stack alignment, promise we won't alloc
+        mov(r0, r1);
+        mov(r1, r2);
+        // Store the result into the variable on the left side of the CONS
+        gen_sm_unapply_pat(pat->left);
+        // Restore pnext somewhere sensible
+        pop(t0);
+        // Load the right side of the CONS (the tail) into registers
+        // Right side of cons expects [ rax, rdi, rsi ] = [ pnext, w1, w2 ]
+        switch (stack_size_of_type(pat->right->type)) {
+          case 3 * WORD_SIZE:   loadc(r2, t0, 2*WORD_SIZE,  "w2 into r2");
+          case 2 * WORD_SIZE:   loadc(r1, t0, WORD_SIZE,    "w1 into r1");
+          case 1 * WORD_SIZE:   loadc(r0, t0, 0,            "pnext into r0");
+              break;
+          default:
+            assert(0 && "TODO: deal with larger variables");
+            break;
+        }
+        gen_sm_unapply_pat(pat->right);
+        break;
+      }
+    }
+}
+
 static void gen_sm_binop(Expr* expr)
 {
     gen_stack_machine_code(expr->left);     // left expression into r0
@@ -561,9 +676,9 @@ static void gen_stack_machine_code(Expr* expr)
 
             // and r0 contains first word of arg (even if arg is () )
             // and %rdi contains second word
-            mov("%rsi", r0); // first word of argument into second argument pos
+            mov(r2, r0); // first word of argument into second argument pos
             if (stack_size_of_type(expr->right->type) > WORD_SIZE) {
-                mov("%rdx", r1); // move into argument 3
+                mov(r3, r1); // move into argument 3
             }
             pop(r1); // pop closure ptr of function object is always first param
             pop(r0);
@@ -582,12 +697,13 @@ static void gen_stack_machine_code(Expr* expr)
             if (expr->var_id != -1) { // It's a local variable
                 const VarEx var = variable_table[expr->var_id];
                 if (var.size > 0) {
-                    char* pfn; asprintf(&pfn, "var %s local w1", var.name);
+                    char* pfn; asprintf(&pfn, "var %s local word 1", var.name);
                     // Should currently we are ordering struct members
                     // downwards... should we?
                     loadc(r0, bp, -var.stack_offset, pfn); // Load word into r0
                     if (var.size > WORD_SIZE) {
-                        char* pfn2; asprintf(&pfn2, "var %s local w2", var.name);
+                        char* pfn2; asprintf(&pfn2, "var %s local word 2",
+                                var.name);
                         // load subsequent word into r1 for "return"
                         loadc(r1, bp, -var.stack_offset - WORD_SIZE, pfn2);
                         free(pfn2);
@@ -613,7 +729,7 @@ static void gen_stack_machine_code(Expr* expr)
                 // load address of our closure
                 loadc(t0, bp, closure_offset(curr_func), "addr closure");
                 // load the value from closure memory
-                char* pfn; asprintf(&pfn, "var %s closure w1", expr->var);
+                char* pfn; asprintf(&pfn, "var %s closure word 1", expr->var);
                 loadc(r0, t0, pos, pfn);
                 pfn[strlen(pfn)-1] = '2';
                 if (stack_size_of_type(expr->type) > WORD_SIZE) {
@@ -628,6 +744,11 @@ static void gen_stack_machine_code(Expr* expr)
             break;
         case UNITVAL:
             mov_imm(r0, 0); // Not really necessary
+            break;
+        case STRVAL:
+            // 1. Emit string constant into the constants area with a label
+            // 2. Emit a load instruction
+            assert(0 && "TODO: string constants");
             break;
         case FUNC_EXPR:
         {
@@ -706,20 +827,11 @@ static void gen_stack_machine_code(Expr* expr)
             // to a location on the stack, then emit code for the subexpr
             gen_stack_machine_code(binding->init);
             // Now the result is in r0 for ints but in r0 and r1 for funcs
-            const VarEx var = variable_table[binding->var_id];
-            if (var.size > 0) {
-                store(-var.stack_offset, bp, r0); // Store r0 into stack
-                if (var.size > WORD_SIZE) {
-                    store(-var.stack_offset - WORD_SIZE, bp, r1);
-                }
-            }
+            gen_sm_unapply_pat(binding->pattern);
 
             Var* saved_stack_ptr = var_stack_ptr;
-            if (binding->pattern->tag == PAT_VAR) {
-                push_var(binding->pattern->name, binding->init->type);
-            } else {
-                assert(0 && "TODO: other pattern types");
-            }
+            push_vars_pat(binding->pattern);
+
             gen_stack_machine_code(binding->subexpr);
             var_stack_ptr = saved_stack_ptr;
             break;
@@ -742,6 +854,26 @@ static void gen_stack_machine_code(Expr* expr)
             }
             label(end_of_false);
             break;
+        }
+        case LIST:
+        {
+            // Idea: generate code that allocates the list items from the end
+            // to the start and then leaves the start item on the stack
+            if (stack_size_of_type(expr->type) > 7 * WORD_SIZE) {
+                fprintf(stderr, EPFX"stack size of list too large");
+                exit(EXIT_FAILURE);
+            }
+            gen_list_from_end(expr->expr_list, stack_size_of_type(expr->type));
+            break;
+        }
+        case VECTOR:
+        {
+            assert(0 && "TODO: vector codegen");
+            break;
+        }
+        case TUPLE:
+        {
+            assert(0 && "TODO: tuple codgen");
         }
     }
 }
@@ -828,6 +960,27 @@ static size_t stack_size_of_type(TypeExpr* type)
           assert(0 && "unresolved type constraint");
           break;
       }
+      case TYPE_CONSTRUCTOR:
+      {
+          if (type->constructor == symbol("list")) {
+
+              return WORD_SIZE + stack_size_of_type(type->param);
+          } else if (type->constructor == symbol("vector")) {
+              // Just a pointer to the root
+              // Maybe putting the first 32 elems on stack could be an opt
+              // later
+              return WORD_SIZE;
+          } else {
+              assert(0 && "TODO: other type constructors");
+          }
+          break;
+      }
+      case TYPE_TUPLE:
+      {
+          // stack-based tuples - add them together
+          return stack_size_of_type(type->left) +
+              stack_size_of_type(type->right);
+      }
     }
     abort();
 }
@@ -859,9 +1012,26 @@ static char* name_param_func(Symbol func_name, int param_idx)
     }
     char* end = stpncpy(pfn, func_name, len - 1);
     for (int i = 0; i < param_idx; i++)
-        *end++ = '_';
+        *end++ = '$'; // This isn't used is normal function names
     pfn[len-1] = '\0';
     return pfn;
+}
+
+static void calculate_activation_records_pat(Pattern* pat, Function* curr_func)
+{
+    switch (pat->tag)
+    {
+      case PAT_VAR:
+        add_var_to_locals(curr_func, pat->name, pat->type);
+        pat->var_id = (var_stack_ptr - 1)->var_id;
+        break;
+      case PAT_DISCARD:
+        break; // Do nothing...
+      case PAT_CONS:
+        calculate_activation_records_pat(pat->left, curr_func);
+        calculate_activation_records_pat(pat->right, curr_func);
+        break;
+    }
 }
 
 static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
@@ -894,6 +1064,7 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
       }
       case UNITVAL:
       case INTVAL:
+      case STRVAL:
         break;
       case FUNC_EXPR:
       {
@@ -948,12 +1119,8 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
       {
         calculate_activation_records_expr(expr->binding.init, curr_func);
         Var* saved_stack_ptr = var_stack_ptr;
-        if (expr->binding.pattern->tag == PAT_VAR) {
-            add_var_to_locals(curr_func, expr->binding.pattern->name, expr->binding.init->type);
-        } else {
-            assert(0 && "TODO: patterns in codegen");
-        }
-        expr->binding.var_id = (var_stack_ptr - 1)->var_id;
+        // modifies var_stack_ptr
+        calculate_activation_records_pat(expr->binding.pattern, curr_func);
 
         calculate_activation_records_expr(expr->binding.subexpr, curr_func);
         var_stack_ptr = saved_stack_ptr;
@@ -965,6 +1132,14 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
         calculate_activation_records_expr(expr->btrue, curr_func);
         calculate_activation_records_expr(expr->bfalse, curr_func);
         break;
+      }
+      case LIST:
+      case VECTOR:
+      case TUPLE:
+      {
+        for (ExprList* l = expr->expr_list; l; l = l->next) {
+            calculate_activation_records_expr(l->expr, curr_func);
+        }
       }
     }
 }
@@ -993,6 +1168,7 @@ static void rewrite_functions(Expr* expr)
       case VAR:
       case UNITVAL:
       case INTVAL:
+      case STRVAL:
         break;
       case FUNC_EXPR:
       {
@@ -1034,6 +1210,14 @@ static void rewrite_functions(Expr* expr)
         rewrite_functions(expr->btrue);
         rewrite_functions(expr->bfalse);
         break;
+      }
+      case LIST:
+      case VECTOR:
+      case TUPLE:
+      {
+        for (ExprList* l = expr->expr_list; l; l = l->next) {
+            rewrite_functions(l->expr);
+        }
       }
     }
 }
