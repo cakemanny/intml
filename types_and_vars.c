@@ -139,8 +139,17 @@ __pure static _Bool typexpr_equals(TypeExpr* left, TypeExpr* right)
         if (right->tag != TYPE_TUPLE) {
             return 0;
         }
-        return typexpr_equals(left->left, right->left)
-            && typexpr_equals(left->right, right->right);
+        for (TypeExprList* l = left->type_list, * r = right->type_list;
+                l || r; l = l->next, r = r->next)
+        {
+            if (!(l && r)) {
+                return 0; // not same length
+            }
+            if (!typexpr_equals(l->type, r->type)) {
+                return 0;
+            }
+        }
+        return 1;
       }
       case TYPE_CONSTRUCTOR:
       {
@@ -261,6 +270,10 @@ static void print_type_error(TypeExpr* expected, TypeExpr* actual)
     tprintf(stderr, "  expected: %T\n  actual: %T\n", expected, actual);
 }
 
+#define foreach(list, varname, body) \
+for (typeof(*list)* varname = list; varname; varname = varname->next) { \
+    body \
+}
 
 __pure static _Bool solid_type(TypeExpr* type)
 {
@@ -270,15 +283,21 @@ __pure static _Bool solid_type(TypeExpr* type)
         case TYPE_NAME:
             return 1;
         case TYPE_ARROW:
-        case TYPE_TUPLE:
             return solid_type(type->left) && solid_type(type->right);
         case TYPE_CONSTRAINT:
             return 0;
         case TYPE_CONSTRUCTOR:
             return solid_type(type->param);
+        case TYPE_TUPLE:
+            foreach(type->type_list, l,
+                if (!solid_type(l->type))
+                    return 0;
+            )
+            return 1;
     }
     abort();
 }
+
 
 static _Bool type_uses_constraint(TypeExpr* type, int constraint_id)
 {
@@ -288,13 +307,37 @@ static _Bool type_uses_constraint(TypeExpr* type, int constraint_id)
     {
       // the dereffed might, but dereffing will get the new value
       case TYPE_NAME: return 0;
-      case TYPE_TUPLE:
       case TYPE_ARROW: return type_uses_constraint(type->left, constraint_id)
                        || type_uses_constraint(type->right, constraint_id);
       case TYPE_CONSTRAINT: return type->constraint_id == constraint_id;
       case TYPE_CONSTRUCTOR: return type_uses_constraint(type->param, constraint_id);
+      case TYPE_TUPLE:
+      {
+        foreach(type->type_list, l,
+            if (type_uses_constraint(l->type, constraint_id))
+                return 1;
+        )
+        return 0;
+      }
     }
     abort();
+}
+
+static TypeExpr* replaced_constraint(TypeExpr*, int, TypeExpr* );
+static TypeExprList* replaced_constraint_list(
+        TypeExprList* toreplace, int constraint_id, TypeExpr* theory)
+{
+    TypeExprList* tmp = NULL;
+    for (TypeExprList* l = toreplace; l; l = l->next) {
+        tmp = type_add(tmp, replaced_constraint(l->type, constraint_id, theory));
+    }
+    typeof(tmp) result = reversed_types(tmp);
+    while (tmp) {
+        typeof(tmp) tmp2 = tmp->next;
+        free((void*)tmp); // cast away const
+        tmp = tmp2;
+    }
+    return result;
 }
 
 static TypeExpr* replaced_constraint(
@@ -313,8 +356,8 @@ static TypeExpr* replaced_constraint(
             theory : toreplace;
       case TYPE_TUPLE:
         return typetuple(
-                replaced_constraint(toreplace->left, constraint_id, theory),
-                replaced_constraint(toreplace->right, constraint_id, theory));
+                replaced_constraint_list(
+                    toreplace->type_list, constraint_id, theory));
       case TYPE_CONSTRUCTOR:
         return typeconstructor(
             replaced_constraint(toreplace->param, constraint_id, theory),
@@ -451,6 +494,15 @@ static void apply_theory(
     }
 }
 
+static int len_typelist(int acc, TypeExprList* list)
+{
+    if (!list) {
+        return 0;
+    }
+    return len_typelist(1 + acc, list->next);
+}
+#define len_typelist(x) len_typelist(0, x)
+
 /*
  * Attempt to add a theory that these types are equal. Which we will later
  * try to unify
@@ -504,10 +556,9 @@ static int theorise_equal(TypeExpr* etype, TypeExpr* newtype)
             }
         }
       }
-      case TYPE_TUPLE:
       case TYPE_ARROW:
       {
-        if (newtype->tag != etype->tag) {
+        if (newtype->tag != TYPE_ARROW) {
             return 0;
         }
         return theorise_equal(etype->left, newtype->left)
@@ -522,6 +573,23 @@ static int theorise_equal(TypeExpr* etype, TypeExpr* newtype)
             return theorise_equal(etype->param, newtype->param);
         }
         return 0;
+      case TYPE_TUPLE:
+      {
+        if (newtype->tag != TYPE_TUPLE) { return 0; }
+        if (len_typelist(etype->type_list) != len_typelist(newtype->type_list)) {
+            // Not sure whether it should make it this far
+            fprintf(stderr,
+                    "warn: theorising equal different sized tuple types");
+            return 0;
+        }
+        int types_added = 0;
+        for (TypeExprList* l = etype->type_list, * r = newtype->type_list;
+                l; l = l->next, r = r->next)
+        {
+            types_added += theorise_equal(l->type, r->type);
+        }
+        return types_added;
+      }
     }
     abort(); // shouln't be possible
 }

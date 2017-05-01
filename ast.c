@@ -17,15 +17,6 @@ static void* xmalloc(size_t size)
 }
 
 
-DeclarationList* declaration_list(Declaration* node)
-{
-    DeclarationList* result = xmalloc(sizeof *result);
-    result->declaration = node;
-    result->next = NULL;
-    return result;
-}
-
-
 DeclarationList* add_declaration(DeclarationList* list, Declaration* node)
 {
     DeclarationList* result = xmalloc(sizeof *result);
@@ -34,24 +25,28 @@ DeclarationList* add_declaration(DeclarationList* list, Declaration* node)
     return result;
 }
 
+DeclarationList* declaration_list(Declaration* node)
+{
+    return add_declaration(NULL, node);
+}
+
+
+#define REVERSE_LIST_IMPL(T, list)              \
+{                                               \
+    T* tmp;                                     \
+    T* newhead = NULL;                          \
+    while (list) { /* three pointer shuffle! */ \
+        tmp         = list->next;               \
+        list->next  = newhead;                  \
+        newhead     = list;                     \
+        list        = tmp;                      \
+    }                                           \
+    return newhead;                             \
+}
+
 DeclarationList* reverse_declarations(DeclarationList* list)
 {
-    DeclarationList* tmp = NULL;
-    DeclarationList* newhead = NULL;
-    for (DeclarationList* c = list; c; c = tmp)
-    {
-        /*
-         *  A -> B -> C -> NULL
-         *  A -> NULL,          B -> C -> NULL
-         *  B -> A -> NULL,     C -> NULL
-         *  C -> B -> A -> NULL
-         */
-        tmp = c->next;      // Grab C
-        c->next = newhead;  // Repoint B
-        newhead = c;        // adjust new head
-        // c = tmp (in for above) // move next
-    }
-    return newhead;
+    REVERSE_LIST_IMPL(DeclarationList, list);
 }
 
 Declaration* func(Symbol name, ParamList* params, Expr* body)
@@ -104,10 +99,12 @@ Param* param_with_type(Symbol name, TypeExpr* type)
     return param;
 
 }
+
 Param* param(Symbol name)
 {
     return param_with_type(name, NULL);
 }
+
 
 ParamList* add_param(ParamList* list, Param* param)
 {
@@ -117,27 +114,16 @@ ParamList* add_param(ParamList* list, Param* param)
     return result;
 }
 
-
 ParamList* param_list(Param* param)
 {
-    ParamList* list = xmalloc(sizeof *list);
-    list->param = param;
-    list->next = NULL;
-    return list;
+    return add_param(NULL, param);
 }
 
 ParamList* reverse_params(ParamList* list)
 {
-    ParamList* tmp;
-    ParamList* newhead = NULL;
-    while (list) { // three pointer shuffle!
-        tmp         = list->next;
-        list->next  = newhead;
-        newhead     = list;
-        list        = tmp;
-    }
-    return newhead;
+    REVERSE_LIST_IMPL(ParamList, list);
 }
+
 
 static Expr* binexpr(int tag, Expr* left, Expr* right)
 {
@@ -303,15 +289,7 @@ ExprList* add_expr(ExprList* list, Expr* to_add)
 
 ExprList* reverse_list(ExprList* list)
 {
-    ExprList* tmp;
-    ExprList* newhead = NULL;
-    while (list) { // three pointer shuffle!
-        tmp         = list->next;
-        list->next  = newhead;
-        newhead     = list;
-        list        = tmp;
-    }
-    return newhead;
+    REVERSE_LIST_IMPL(ExprList, list);
 }
 
 
@@ -344,11 +322,10 @@ TypeExpr* typeconstraint(int constraint_id)
     return result;
 }
 
-TypeExpr* typetuple(TypeExpr* left, TypeExpr* right)
+TypeExpr* typetuple(TypeExprList* types)
 {
     struct TypeExpr* result = typexpr(TYPE_TUPLE);
-    result->left = left;
-    result->right = right;
+    result->type_list = types;
     return result;
 }
 
@@ -359,6 +336,34 @@ TypeExpr* typeconstructor(TypeExpr* param, Symbol constructor)
     result->constructor = constructor;
     return result;
 }
+
+TypeExprList* type_add(TypeExprList* list, TypeExpr* newhead)
+{
+    struct TypeExprList* result = xmalloc(sizeof *result);
+    result->type = newhead;
+    result->next = list;
+    return result;
+}
+
+TypeExprList* type_list(TypeExpr* head)
+{
+    return type_add(NULL, head);
+}
+
+// helper for subsequent reversed_types
+static TypeExprList* rev_type_go(TypeExprList* acc, TypeExprList* list)
+{
+    if (!list) {
+        return acc;
+    }
+    // otherwise move from head of input to head of output
+    return rev_type_go(type_add(acc, list->type), list->next);
+}
+TypeExprList* reversed_types(TypeExprList* list)
+{
+    return rev_type_go(NULL, list);
+}
+
 
 static struct Pattern* pat(enum PatternTag tag)
 {
@@ -410,10 +415,18 @@ void print_typexpr(FILE* out, TypeExpr* expr)
         fprintf(out, "'%d", expr->constraint_id);
         break;
     case TYPE_TUPLE:
-        print_typexpr(out, expr->left);
-        fputs(" * ", out);
-        print_typexpr(out, expr->right);
+    {
+        fputc('(', out);
+        // must always have two elems
+        TypeExprList* list = expr->type_list;
+        print_typexpr(out, list->type);
+        for (TypeExprList* l = list->next; l; l = l->next) {
+            fputs(" * ", out);
+            print_typexpr(out, l->type);
+        }
+        fputc(')', out);
         break;
+    }
     case TYPE_CONSTRUCTOR:
         fputc('(', out);
         print_typexpr(out, expr->param);

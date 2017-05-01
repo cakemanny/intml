@@ -1,0 +1,17 @@
+#!/bin/bash
+
+intml=../../intml
+
+expect () {
+    result=$(echo "$1" | $intml -p -)
+    if [[ "$result" == "$2" ]]; then
+        echo "pass: $1  ==>  $2"
+    else
+        echo "fail: $1  ==>  $result ~~ expected: $2"
+    fi
+}
+
+expect "type x = a * b * c" "((type x (a * b * c)))"
+expect "type x = (a * b) * c" "((type x ((a * b) * c)))"
+expect "type x = a * (b * c)" "((type x (a * (b * c))))"
+

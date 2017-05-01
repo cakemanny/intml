@@ -1020,9 +1020,12 @@ static size_t stack_size_of_type(TypeExpr* type)
       }
       case TYPE_TUPLE:
       {
-          // stack-based tuples - add them together
-          return stack_size_of_type(type->left) +
-              stack_size_of_type(type->right);
+          int size = 0;
+          for (TypeExprList* l = type->type_list; l; l = l->next) {
+              // stack-based tuples - add them together
+              size += stack_size_of_type(l->type);
+          }
+          return size;
       }
     }
     abort();

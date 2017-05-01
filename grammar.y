@@ -29,6 +29,7 @@ static DeclarationList* tree = NULL;
     ParamList*          params;
     Param*              param;
     TypeExpr*           typexpr;
+    TypeExprList*       types;
 
 /* terminals */
     int                 intval;     // we should probably store these
@@ -54,6 +55,7 @@ static DeclarationList* tree = NULL;
 %type <exprs> exprlist nonemptylist
 %type <expr> expr letexpr exprterm
 %type <typexpr> typexpr typeterm
+%type <types> typetuple
 
 %nonassoc LET IN TYPE EXTERNAL /* These are to make let bindings stick to top level if poss */
 %right ARROW    /* function typexprs */
@@ -152,17 +154,19 @@ nonemptylist:
   | expr ';' nonemptylist   { $$ = add_expr($3, $1); }
   ;
 typexpr:
-    /* should be typexpr -> typexpr  but use terminals on right to
-     * clear up ambiguities in the grammar
-     */
-    typeterm ARROW typexpr  { $$ = typearrow($1, $3); }
-  | typexpr '*' typeterm    { $$ = typetuple($1, $3);  }
-  | typexpr ID              { $$ = typeconstructor($1, $2); }
-  | typeterm                { $$ = $1; }
+    typexpr ARROW typexpr       { $$ = typearrow($1, $3); }
+  | typetuple                   { $$ = typetuple(reversed_types($1));  }
+  | typeterm                    { $$ = $1 }
   ;
 typeterm:
-    '(' typexpr ')'         { $$ = $2; }
-  | ID                      { $$ = typename($1); }
+    '(' typexpr ')'             { $$ = $2; }
+  | typeterm ID                 { $$ = typeconstructor($1, $2); }
+  | ID                          { $$ = typename($1); }
+  ;
+typetuple:
+    /* these need to be a list as (1,2,3) != ((1,2),3) and != (1,(2,3))   */
+    typeterm '*' typeterm       { $$ = type_add(type_list($1), $3); }
+  | typetuple '*' typeterm      { $$ = type_add($1, $3); }
   ;
 %%
 

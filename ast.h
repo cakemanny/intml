@@ -4,39 +4,34 @@
 #include "symbols.h"
 #include <stdio.h> // FILE*
 
-// Pre-declare our struct types to allow recursive tree
-struct DeclarationList;
-struct Declaration;
-struct Func;
-struct Binding;
-struct Type;
-struct External;
-struct ParamList;
-struct Param;
-struct Pattern;
-struct Expr;
-struct FuncExpr;
-struct BindExpr;
-struct ExternExpr;
-struct ExprList;
-struct TypeExpr;
+#define DECLARE_STRUCT(name)  struct name; typedef struct name name
 
-// typedef everything to make it all nicer to read and type
-typedef struct DeclarationList DeclarationList;
-typedef struct Declaration Declaration;
-typedef struct Func Func;
-typedef struct Binding Binding;
-typedef struct Type Type;
-typedef struct External External;
-typedef struct ParamList ParamList;
-typedef struct Param Param;
-typedef struct Pattern Pattern;
-typedef struct Expr Expr;
-typedef struct FuncExpr FuncExpr;
-typedef struct BindExpr BindExpr;
-typedef struct ExternExpr ExternExpr;
-typedef struct ExprList ExprList;
-typedef const struct TypeExpr TypeExpr; // can use "struct TypeExpr" for mutable version in constructors
+// Pre-declare our struct types to allow recursive tree
+DECLARE_STRUCT( DeclarationList );
+DECLARE_STRUCT( Declaration     );
+DECLARE_STRUCT( Func            );
+DECLARE_STRUCT( Binding         );
+DECLARE_STRUCT( Type            );
+DECLARE_STRUCT( External        );
+DECLARE_STRUCT( ParamList       );
+DECLARE_STRUCT( Param           );
+DECLARE_STRUCT( Pattern         );
+DECLARE_STRUCT( Expr            );
+DECLARE_STRUCT( FuncExpr        );
+DECLARE_STRUCT( BindExpr        );
+DECLARE_STRUCT( ExternExpr      );
+DECLARE_STRUCT( ExprList        );
+
+/*
+ * Declare types so that they are immutable as this has some nice properties
+ * We may do some interning of these at some point
+ */
+struct TypeExpr;
+struct TypeExprList;
+typedef const struct TypeExpr TypeExpr; /* can use "struct TypeExpr" for
+                                           mutable version in the constructor */
+typedef const struct TypeExprList TypeExprList;
+
 
 /* define our tree */
 
@@ -194,18 +189,23 @@ struct TypeExpr {
         TYPE_CONSTRUCTOR,
     } tag;
     union {
-        Symbol name;
-        struct { /* typearrow */
+        Symbol name;                /* TYPE_NAME */
+        struct {                    /* TYPE_ARROW */
             TypeExpr* left;
             TypeExpr* right;
         };
-        int constraint_id;
-        // perhaps tuple should be a list of types...
-        struct {
+        int constraint_id;          /* TYPE_CONSTRAINT */
+        TypeExprList* type_list;    /* TYPE_TUPLE */
+        struct {                    /* TYPE_CONSTRUCTOR */
             TypeExpr* param;
             Symbol constructor;
         };
     };
+};
+
+struct TypeExprList {
+    TypeExpr* type;
+    TypeExprList* next;
 };
 
 struct Pattern {
@@ -269,7 +269,7 @@ DeclarationList* declaration_list(Declaration* node);
 DeclarationList* add_declaration(DeclarationList* list, Declaration* node);
 
 /*
- * Returns a reverse declaration list
+ * Returns a reverse declaration list. *Mutates the list*
  */
 DeclarationList* reverse_declarations(DeclarationList* list);
 
@@ -314,7 +314,7 @@ ParamList* add_param(ParamList* list, Param* param);
 ParamList* param_list(Param* param);
 
 /*
- * Returns a reversed param list
+ * Returns a reversed param list. *Mutates the list*
  */
 ParamList* reverse_params(ParamList* list);
 
@@ -431,13 +431,28 @@ TypeExpr* typeconstraint(int constraint_id);
 /*
  * Creates a type tuple
  */
-TypeExpr* typetuple(TypeExpr* left, TypeExpr* right);
+TypeExpr* typetuple(TypeExprList* type);
 
 /*
  * Creates a constructed type where constrname is a type constructor
  * e.g. int list or string list
  */
 TypeExpr* typeconstructor(TypeExpr* param, Symbol constrname);
+
+/*
+ * A new list with a type within, head
+ */
+TypeExprList* type_list(TypeExpr* head);
+
+/*
+ * Cons newhead onto the head of the list
+ */
+TypeExprList* type_add(TypeExprList* list, TypeExpr* newhead);
+
+/*
+ * Returns a new reversed list. Does not mutate the given list
+ */
+TypeExprList* reversed_types(TypeExprList* list);
 
 /*
  * Create a value-name pattern
