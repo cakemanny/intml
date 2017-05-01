@@ -10,12 +10,14 @@ struct Declaration;
 struct Func;
 struct Binding;
 struct Type;
+struct External;
 struct ParamList;
 struct Param;
 struct Pattern;
 struct Expr;
 struct FuncExpr;
 struct BindExpr;
+struct ExternExpr;
 struct ExprList;
 struct TypeExpr;
 
@@ -25,12 +27,14 @@ typedef struct Declaration Declaration;
 typedef struct Func Func;
 typedef struct Binding Binding;
 typedef struct Type Type;
+typedef struct External External;
 typedef struct ParamList ParamList;
 typedef struct Param Param;
 typedef struct Pattern Pattern;
 typedef struct Expr Expr;
 typedef struct FuncExpr FuncExpr;
 typedef struct BindExpr BindExpr;
+typedef struct ExternExpr ExternExpr;
 typedef struct ExprList ExprList;
 typedef const struct TypeExpr TypeExpr; // can use "struct TypeExpr" for mutable version in constructors
 
@@ -61,16 +65,24 @@ struct Type {
     TypeExpr* definition;
 };
 
+struct External {
+    Symbol name;
+    TypeExpr* type;
+    Symbol external_name;
+};
+
 struct Declaration {
     enum DeclTag {
         DECL_FUNC = 1,
         DECL_BIND,
-        DECL_TYPE
+        DECL_TYPE,
+        DECL_EXTERN,
     }               tag;
     union {
         Func        func;
         Binding     binding;
         Type        type;
+        External    ext;
     };
 };
 
@@ -111,6 +123,15 @@ struct BindExpr {
     Expr* subexpr;
 };
 
+struct ExternExpr {
+    Symbol name;
+    TypeExpr* type;
+    Symbol external_name;
+    Expr* subexpr;
+
+    int var_id;
+};
+
 struct Expr {
     enum ExprTag {
         PLUS = 1,
@@ -131,6 +152,7 @@ struct Expr {
         LIST,
         VECTOR,
         TUPLE,
+        EXTERN_EXPR, /* not in the language - just for codegen */
     }               tag;
     union {
         struct { /* PLUS - APPLY */
@@ -151,7 +173,8 @@ struct Expr {
             Expr*   btrue;      // true branch
             Expr*   bfalse;     // false branch
         };
-        ExprList* expr_list; /* LIST, VECTOR, TUPLE */
+        ExprList*   expr_list; /* LIST, VECTOR, TUPLE */
+        ExternExpr  ext;        /* EXTERN_EXPR */
     };
     /* We will want to be able to type all our expressions */
     TypeExpr*       type;
@@ -261,9 +284,14 @@ Declaration* func(Symbol name, ParamList* params, Expr* body);
 Declaration* binding(Pattern* pattern, Expr* init);
 
 /*
- * Creates a type declaration node
+ * Create a type declaration node
  */
 Declaration* type(Symbol name, TypeExpr* definition);
+
+/*
+ * Create an external declaration node
+ */
+Declaration* externdecl(Symbol name, TypeExpr* type, Symbol external_name);
 
 /*
  * Construct a param node from a symbol
@@ -359,6 +387,12 @@ Expr* vector(ExprList* exprs);
  * Creates a tuple expression
  */
 Expr* tuple(ExprList* exprs);
+
+/*
+ * Only used by codegen in rewriting
+ */
+Expr* local_extern(
+        Symbol name, TypeExpr* type, Symbol external_name, Expr* subexpr);
 
 /*
  * Creates an empty list of expressions (used in compund expressions like lists 

@@ -42,12 +42,12 @@ static DeclarationList* tree = NULL;
 %token UNIT
 %token <intval> INT
 %token <text>   STR_LIT
-%token <identifier> ID
+%token <identifier> ID TYPEID
 %token <error> ERROR
 %token EOFTOK
 
 %type <declarations> program declarations
-%type <declaration> declaration letdecl typedecl
+%type <declaration> declaration letdecl
 %type <pattern> pattern
 %type <params> params
 %type <param> param
@@ -55,7 +55,7 @@ static DeclarationList* tree = NULL;
 %type <expr> expr letexpr exprterm
 %type <typexpr> typexpr typeterm
 
-%nonassoc LET IN   /* These are to make let bindings stick to top level if poss */
+%nonassoc LET IN TYPE EXTERNAL /* These are to make let bindings stick to top level if poss */
 %right ARROW    /* function typexprs */
 %nonassoc '[' ']' VSTART VEND
 %right ';'
@@ -82,7 +82,11 @@ declarations:
 /* we will add types to this*/
 declaration:
     letdecl                     { $$ = $1; }
-  | typedecl                    { $$ = $1; }
+  | TYPE ID '=' typexpr         { $$ = type($2, $4); }
+  | EXTERNAL ID ':' typexpr '=' STR_LIT
+    {
+      $$ = externdecl($2, $4, $6);
+    }
   ;
 letdecl:
     LET pattern '=' expr        { $$ = binding($2, $4); }
@@ -147,9 +151,6 @@ nonemptylist:
     expr                    { $$ = add_expr(exprlist(), $1); }
   | expr ';' nonemptylist   { $$ = add_expr($3, $1); }
   ;
-typedecl:
-    TYPE ID '=' typexpr     { $$ = type($2, $4); }
-  ;
 typexpr:
     /* should be typexpr -> typexpr  but use terminals on right to
      * clear up ambiguities in the grammar
@@ -158,6 +159,7 @@ typexpr:
   | typexpr '*' typeterm    { $$ = typetuple($1, $3);  }
   | typexpr ID              { $$ = typeconstructor($1, $2); }
   | typeterm                { $$ = $1; }
+  ;
 typeterm:
     '(' typexpr ')'         { $$ = $2; }
   | ID                      { $$ = typename($1); }

@@ -406,6 +406,9 @@ static void apply_theory_expr(Expr* expr, int constraint_id, TypeExpr* theory)
             apply_theory_expr(l->expr, constraint_id, theory);
         }
         break;
+      case EXTERN_EXPR:
+        assert(expr->tag != EXTERN_EXPR && "not expected");
+        break;
     }
 }
 
@@ -419,6 +422,7 @@ static void apply_theory(
         Declaration* decl = c->declaration;
         switch (decl->tag)
         {
+          case DECL_EXTERN:
           case DECL_TYPE:
            break;
           case DECL_BIND:
@@ -1120,6 +1124,9 @@ static int deducetype_expr(Expr* expr)
         // TODO
         return types_added;
       }
+      case EXTERN_EXPR:
+        assert(expr->tag != EXTERN_EXPR && "not expected");
+        break;
     }
     abort(); // Shouldn't be possible to get here
 }
@@ -1141,8 +1148,10 @@ __pure static _Bool declares_name(Declaration* declaration, Symbol name)
 {
     switch (declaration->tag) {
         case DECL_FUNC: return declaration->func.name == name;
-        case DECL_BIND: return declares_name_pat(declaration->binding.pattern, name);
+        case DECL_BIND: return declares_name_pat(
+                                declaration->binding.pattern, name);
         case DECL_TYPE: return declaration->type.name == name;
+        case DECL_EXTERN: return declaration->ext.name == name;
     }
     abort();
 }
@@ -1170,6 +1179,7 @@ __pure static TypeExpr** decl_type_ptr(Declaration* declaration, Symbol name)
                                 declaration->binding.pattern, name);
                         // chances are we don't want this case:
         case DECL_TYPE: return &declaration->type.definition;
+        case DECL_EXTERN: return &declaration->ext.type;
     }
     abort();
 }
@@ -1326,6 +1336,16 @@ static void type_and_check_exhaustively(DeclarationList* root)
                 // restore stack and push func decl
                 var_stack_ptr = pre_param_stack_ptr;
                 push_var(decl->func.name, decl->func.type);
+                break;
+              }
+              case DECL_EXTERN:
+              {
+                if (!solid_type(decl->ext.type)) {
+                    fprintf(stderr, EPFX"external declaration does not have "
+                            "complete type signature: %s\n", decl->ext.name);
+                    exit(EXIT_FAILURE);
+                }
+                push_var(decl->ext.name, decl->ext.type);
                 break;
               }
             }
@@ -1538,6 +1558,9 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
       {
           assert(0 && "TODO: TUPLEs");
       }
+      case EXTERN_EXPR:
+        assert(expr->tag != EXTERN_EXPR && "not expected");
+        break;
     }
     return result;
 }
@@ -1581,6 +1604,15 @@ static _Bool check_if_fully_typed_root(DeclarationList* root)
                 // TODO: Need another way of recording the hierachy
                 result &= check_if_fully_typed_pattern(decl->binding.pattern, NULL);
                 result &= check_if_fully_typed_expr(decl->binding.init, NULL);
+            }
+            break;
+          }
+          case DECL_EXTERN:
+          {
+            if (!solid_type(decl->ext.type)) {
+                fprintf(stderr, EPFX"external declaration without complete "
+                        "type: %s\n", decl->ext.name);
+                result = 0;
             }
             break;
           }
@@ -1633,6 +1665,7 @@ void check_runtime_properties(DeclarationList* root)
                   case DECL_FUNC: return;
                   case DECL_BIND: return;
                   case DECL_TYPE: break; // don't care about type
+                  case DECL_EXTERN: return; // Should we allow external main
                 }
             } else if (decl->tag != DECL_TYPE) {
                 fprintf(stderr, EPFX"main has incorrect type\n");

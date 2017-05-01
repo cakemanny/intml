@@ -85,6 +85,16 @@ Declaration* type(Symbol name, TypeExpr* definition)
     return result;
 }
 
+Declaration* externdecl(Symbol name, TypeExpr* type, Symbol external_name)
+{
+    Declaration* result = xmalloc(sizeof *result);
+    result->tag = DECL_EXTERN;
+    result->ext.name = name;
+    result->ext.type = type;
+    result->ext.external_name = external_name;
+    return result;
+}
+
 Param* param_with_type(Symbol name, TypeExpr* type)
 {
     Param* param = xmalloc(sizeof *param);
@@ -263,6 +273,18 @@ Expr* tuple(ExprList* exprs)
 {
     Expr* result = expr(TUPLE);
     result->expr_list = exprs;
+    return result;
+}
+
+Expr* local_extern(Symbol name, TypeExpr* type, Symbol external_name, Expr* subexpr)
+{
+    Expr* result = expr(EXTERN_EXPR);
+    result->ext.name = name;
+    result->ext.type = type;
+    result->ext.external_name = external_name;
+    result->ext.subexpr = subexpr;
+
+    result->ext.var_id = -1; /* assigned by codegen */
     return result;
 }
 
@@ -526,6 +548,14 @@ void print_expr(FILE* out, const Expr* expr)
         fprintf(out, "tuple ");
         print_exprlist(out, expr->expr_list);
         break;
+    case EXTERN_EXPR:
+        fprintf(out, "external %s \"%s\" : ", expr->ext.name,
+                expr->ext.external_name);
+        print_typexpr(out, expr->ext.type);
+        fputs(" 'in ", out);
+        print_expr(out, expr->func.subexpr);
+        break;
+
     }
     if (expr->type) {
         fprintf(out, " : ");
@@ -553,6 +583,11 @@ void print_declaration(FILE* out, const Declaration* decl)
     case DECL_TYPE:
         fprintf(out, "type %s ", decl->type.name);
         print_typexpr(out, decl->type.definition);
+        break;
+    case DECL_EXTERN:
+        fprintf(out, "external %s \"%s\" : ", decl->ext.name,
+                decl->ext.external_name);
+        print_typexpr(out, decl->ext.type);
         break;
     }
     fputc(')', out);

@@ -78,6 +78,10 @@ int debug_codegen = 0;
  * File to write assembly code to
  */
 FILE* cgenout = NULL;
+/*
+ * temp file where data segment is written until it is appended to the end
+ */
+FILE* dataout = NULL;
 
 typedef struct Function {
     Symbol name;
@@ -475,6 +479,7 @@ static int argument_offset(Function* func)
 __attribute__((malloc))
 static char* function_label(Function* func)
 {
+    assert(func - function_table >= 0);
     char* pfn;
     if (asprintf(&pfn, "%s__%ld", func->name, (long)(func - function_table)) == -1) {
         perror("out of memory");
@@ -746,10 +751,30 @@ static void gen_stack_machine_code(Expr* expr)
             mov_imm(r0, 0); // Not really necessary
             break;
         case STRVAL:
+        {
             // 1. Emit string constant into the constants area with a label
             // 2. Emit a load instruction
-            assert(0 && "TODO: string constants");
+            int lvalue = request_label();
+            fprintf(dataout, "L%d:\n", lvalue);
+            fputs("\t.string \"", dataout);
+            const char* s = expr->strval;
+            while (*s != 0) {
+                if (*s == '\n') { fputs("\\n", dataout); }
+                else if (*s == '\\') { fputs("\\\\", dataout); }
+                else if (*s == '\t') { fputs("\\t", dataout); }
+                else fputc(*s, dataout);
+                s++;
+            }
+            fputs("\"\n", dataout);
+
+            int llen = request_label();
+            fprintf(dataout, "L%d:\n", llen);
+            fprintf(dataout, "\t.word %lu\n", strlen(expr->strval));
+            fprintf(cgenout, "	leaq	L%d(%s), %s\n", llen, "%rip", t0);
+            loadc(r0, t0, 0, "length of string");
+            fprintf(cgenout, "	leaq	L%d(%s), %s\n", lvalue, "%rip", r1);
             break;
+        }
         case FUNC_EXPR:
         {
             // Allocate a function object on the stack
@@ -874,6 +899,20 @@ static void gen_stack_machine_code(Expr* expr)
         case TUPLE:
         {
             assert(0 && "TODO: tuple codgen");
+            break;
+        }
+        case EXTERN_EXPR: // it's quite similar...
+        {
+            const VarEx varx = variable_table[expr->ext.var_id];
+            const char* lbl = expr->ext.external_name;
+            fprintf(cgenout, "\tleaq\t%s(%s), %s\n", lbl, "%rip", r0);
+            store(-varx.stack_offset, bp, r0);
+
+            Var* pre_param_stack_ptr = var_stack_ptr;
+            push_var(expr->ext.name, expr->ext.type);
+            gen_stack_machine_code(expr->ext.subexpr);
+            var_stack_ptr = pre_param_stack_ptr;
+            break;
         }
     }
 }
@@ -935,6 +974,10 @@ static size_t stack_size_of_type(TypeExpr* type)
             return WORD_SIZE;
         } else if (type->name == symbol("unit")) {
             return 0;
+        } else if (type->name == symbol("string")) {
+            // 1: length: long long
+            // 2: data:   char*
+            return 2 * WORD_SIZE;
         }
         fprintf(stderr, "%s\n", type->name);
         // FIXME: we either need to keep type map in here, fully expand the
@@ -1140,6 +1183,16 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
         for (ExprList* l = expr->expr_list; l; l = l->next) {
             calculate_activation_records_expr(l->expr, curr_func);
         }
+        break;
+      }
+      case EXTERN_EXPR:
+      {
+        Var* saved_stack_ptr = var_stack_ptr;
+        add_var_to_locals(curr_func, expr->ext.name, expr->ext.type);
+        expr->ext.var_id = (var_stack_ptr - 1)->var_id;
+        calculate_activation_records_expr(expr->ext.subexpr, curr_func);
+        var_stack_ptr = saved_stack_ptr;
+        break;
       }
     }
 }
@@ -1149,7 +1202,7 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
  * parameter e.g. change:
  *   let f x y = x * y in ...
  * into:
- *   let f x = let f_ y = x * y in f_ in ...
+ *   let f x = let f$ y = x * y in f$ in ...
  */
 static void rewrite_functions(Expr* expr)
 {
@@ -1218,6 +1271,18 @@ static void rewrite_functions(Expr* expr)
         for (ExprList* l = expr->expr_list; l; l = l->next) {
             rewrite_functions(l->expr);
         }
+        break;
+      }
+      case EXTERN_EXPR:
+      {
+        /*
+         * Maybe we should rewrite
+         *  external write : int -> string -> int
+         * as:
+         *  let write _1 = let write$ _2 = _write (_1, _2) in write$
+         */
+        rewrite_functions(expr->ext.subexpr);
+        break;
       }
     }
 }
@@ -1272,10 +1337,21 @@ Expr* restructure_tree(DeclarationList* root)
               newnode->type = newnode->binding.subexpr->type;
               return newnode;
           }
+          case DECL_EXTERN:
+          {
+              Expr* newnode = local_extern(
+                      decl->ext.name,
+                      decl->ext.type,
+                      decl->ext.external_name,
+                      restructure_tree(root->next));
+              newnode->type = newnode->ext.subexpr->type;
+              return newnode;
+          }
         }
     }
     abort();
 }
+
 
 void codegen(DeclarationList* root)
 {
@@ -1312,18 +1388,30 @@ void codegen(DeclarationList* root)
         print_function_table(stderr);
     }
 
+    dataout = tmpfile();
+    if (!dataout) {
+        perror("creating a temp file for data section");
+        exit(EXIT_FAILURE);
+    }
+
     // start by not allowing any functions other than main
     // only compile expressions
     emit_header();
-    //fprintf(cgenout, "%s:\n", "ml__main");
     emit_fn_prologue(curr_func);
     gen_stack_machine_code(newroot);
     emit_fn_epilogue(curr_func);
-    //fprintf(cgenout, "\tretq\n");
+
+    fprintf(cgenout, "\n.data\n");
+    fseeko(dataout, SEEK_SET, 0);
+    flockfile(dataout);
+    flockfile(cgenout);
+    clearerr_unlocked(dataout);
+    int c;
+    while ((c = getc_unlocked(dataout)) != EOF) {
+        putc_unlocked(c, cgenout);
+    }
+    funlockfile(cgenout);
+    funlockfile(dataout);
+    fclose(dataout);
 }
-
-
-
-
-
 

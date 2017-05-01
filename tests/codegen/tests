@@ -25,6 +25,39 @@ expect ./lists0 3
 expect ./lists1 4
 expect ./lists2 3
 
+LD=ld
+LDFLAGS=
+LDLIBS=-lc
+if [[ $(uname) == "Darwin" ]]; then
+    LDFLAGS="$LDFLAGS -macosx_version_min $(sw_vers -productVersion)"
+fi
+
+expect2 () {
+    code="$1"
+    otmp=$(mktemp)
+    echo "$code" | ../../intml - | as -o $otmp --
+    ${LD} ${LDFLAGS} -o a.out $otmp ${LDLIBS}
+    ./a.out
+    result=$?
+    if [[ $result == $2 ]]; then
+        echo pass
+    else
+        echo "FAIL: '$1'"
+        echo "  expected: $2"
+        echo "  actual:   $result"
+        exitcode=$((1 + $exitcode))
+    fi
+    rm -f a.out $otmp
+}
+
+expect2 "
+let main () =
+  let snd xs =
+    let _ :: x :: _ = xs in x
+  in snd [ 4; 3; 2; 1 ]
+" 3
+
+
 # Exit with the number of failing tests
 exit $exitcode
 
