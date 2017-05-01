@@ -71,6 +71,23 @@ expect_pass "let fincr f = let g () = 1 + f () in g"
 expect_pass "let eq a b = a = b  let x = eq 1 2"
 expect_fail 'let eq a b = a = b  let x = eq 1 "1"'
 
+# recursive functions
+expect_pass "let rec sum acc xs =
+  let x::tail = xs in
+  if x then sum (x+acc) tail
+  else acc
+let y = sum 0 [4;3;2;1;0]"
+
+expect_pass "
+let sum =
+  let rec go acc xs =
+    let x::tail = xs in
+    if x then go (x+acc) tail
+    else acc
+  in go 0
+let y = sum [4;3;2;1;0]"
+
+
 # Want to be able to infer the type of an earlier function from it's use
 # 10:int && infer 10 => x = 10 in infer x = x => x:int
 expect_pass "let infer x = x    let deduce = infer 10"
@@ -113,6 +130,10 @@ expect_pass "let head xs = let x::_ = xs in x  let y = head [1;2;3]"
 # type aliases
 expect_pass "type metre = int   let f (w:metre) (h:metre) = w * h / 2"
 expect_pass "type intfunc = int -> int  let apply (f:intfunc) x = f x"
+
+#externs
+expect_pass 'external f : int -> int = "example"  let y x = f x + x'
+expect_fail 'external f : string -> string = "example"  let y x = f x + x'
 
 if [[ $failures == 1 ]]; then
     echo 1 failure

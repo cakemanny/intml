@@ -39,8 +39,7 @@ static DeclarationList* tree = NULL;
     const char*         error_msg;
 }
 
-%token LET TYPE IN IF THEN ELSE
-%token UNIT
+%token LET REC TYPE IN IF THEN ELSE
 %token <intval> INT
 %token <text>   STR_LIT
 %token <identifier> ID TYPEID
@@ -54,7 +53,7 @@ static DeclarationList* tree = NULL;
 %type <param> param
 %type <exprs> exprlist nonemptylist
 %type <expr> expr letexpr exprterm
-%type <typexpr> typexpr typeterm
+%type <typexpr> typexpr typeterm optionaltype
 %type <types> typetuple
 
 %nonassoc LET IN TYPE EXTERNAL /* These are to make let bindings stick to top level if poss */
@@ -68,9 +67,9 @@ static DeclarationList* tree = NULL;
 %right CONS
 %left '+' '-'
 %left '*' '/'
-%left ID UNIT INT STR_LIT '('  /* function application -note, typecheck will
-                                  stop strings and ints being functions, rather
-                                  than the grammar */
+%left ID INT STR_LIT '('  /* function application -note, typecheck will
+                             stop strings and ints being functions, rather
+                             than the grammar */
 
 %%
 
@@ -92,7 +91,10 @@ declaration:
   ;
 letdecl:
     LET pattern '=' expr        { $$ = binding($2, $4); }
-  | LET ID params '=' expr      { $$ = func($2, reverse_params($3), $5); }
+  | LET ID params optionaltype '=' expr
+    { $$ = func_w_type($2, reverse_params($3), $4, $6); }
+  | LET REC ID params optionaltype '=' expr
+    { $$ = recfunc_w_type($3, reverse_params($4), $5, $7); }
   ;
 pattern:
     ID                          { $$ = pat_var($1); }
@@ -107,7 +109,7 @@ params:
 param:
     ID                          { $$ = param($1); }
   | '(' ID ':' typexpr ')'      { $$ = param_with_type($2, $4); }
-  | UNIT                        { $$ = param(symbol("()")); }
+  | '(' ')'                     { $$ = param(symbol("()")); }
   ;
 expr:
     letexpr                     { $$ = $1; }
@@ -131,19 +133,27 @@ exprterm:
   | '[' exprlist ']'            { $$ = list($2); }
   | VSTART exprlist VEND        { $$ = vector($2); }
   | ID                          { $$ = var($1); }
-  | UNIT                        { $$ = unit_expr(); }
+  | '(' ')'                     { $$ = unit_expr(); }
   | INT                         { $$ = intval($1); }
   | STR_LIT                     { $$ = strval($1); }
   ;
 letexpr:
-    LET ID params '=' expr IN expr
+    LET ID params optionaltype '=' expr IN expr
     {
-      $$ = local_func($2, reverse_params($3), $5, $7);
+      $$ = local_func_w_type($2, reverse_params($3), $4, $6, $8);
+    }
+  | LET REC ID params optionaltype '=' expr IN expr
+    {
+      $$ = local_recfunc_w_type($3, reverse_params($4), $5, $7, $9);
     }
   | LET pattern '=' expr IN expr
     {
       $$ = local_binding($2, $4, $6);
     }
+  ;
+optionaltype:
+    /* empty */     { $$ = NULL; /* will become type constraint in TC*/ }
+  | ':' typexpr     { $$ = $2; }
   ;
 exprlist:
     /* empty */             { $$ = exprlist(); }

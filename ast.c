@@ -49,15 +49,36 @@ DeclarationList* reverse_declarations(DeclarationList* list)
     REVERSE_LIST_IMPL(DeclarationList, list);
 }
 
-Declaration* func(Symbol name, ParamList* params, Expr* body)
+Declaration* func_w_type(
+        Symbol name, ParamList* params, TypeExpr* type, Expr* body)
 {
     Declaration* result = xmalloc(sizeof *result);
     result->tag = DECL_FUNC;
     result->func.name = name;
     result->func.params = params;
     result->func.body = body;
-    result->func.type = NULL;
+    result->func.resulttype = type;
+
+    result->func.type = NULL; /* deduced by type checker */
     return result;
+}
+
+Declaration* func(Symbol name, ParamList* params, Expr* body)
+{
+    return func_w_type(name, params, NULL, body);
+}
+
+Declaration* recfunc_w_type(
+        Symbol name, ParamList* params, TypeExpr* type, Expr* body)
+{
+    Declaration* result = func_w_type(name, params, type, body);
+    result->tag = DECL_RECFUNC;
+    return result;
+}
+
+Declaration* recfunc(Symbol name, ParamList* params, Expr* body)
+{
+    return recfunc_w_type(name, params, NULL, body);
 }
 
 Declaration* binding(Pattern* pattern, Expr* init)
@@ -207,19 +228,41 @@ Expr* strval(Symbol text)
     return result;
 }
 
-Expr* local_func(Symbol name, ParamList* params, Expr* body, Expr* subexpr)
+Expr* local_func_w_type(
+        Symbol name, ParamList* params, TypeExpr* resulttype, Expr* body,
+        Expr* subexpr)
 {
     Expr* result = expr(FUNC_EXPR);
     FuncExpr* func = &result->func;
     func->name = name;
     func->params = params;
+    func->resulttype = resulttype;
     func->body = body;
     func->subexpr = subexpr;
 
-    func->functype = NULL; /* deduced by type checker */
+    func->functype = NULL;  /* deduced by typechecker */
     func->function_id = -1; /* assigned by codegen */
     func->var_id = -1;      /* assigned by codegen */
     return result;
+}
+
+Expr* local_func(Symbol name, ParamList* params, Expr* body, Expr* subexpr)
+{
+    return local_func_w_type(name, params, NULL, body, subexpr);
+}
+
+Expr* local_recfunc_w_type(
+        Symbol name, ParamList* params, TypeExpr* resulttype, Expr* body,
+        Expr* subexpr)
+{
+    Expr* result = local_func_w_type(name, params, resulttype, body, subexpr);
+    result->tag = RECFUNC_EXPR;
+    return result;
+}
+
+Expr* local_recfunc(Symbol name, ParamList* params, Expr* body, Expr* subexpr)
+{
+    return local_recfunc_w_type(name, params, NULL, body, subexpr);
 }
 
 Expr* local_binding(Pattern* pattern, Expr* init, Expr* subexpr)
@@ -266,7 +309,7 @@ Expr* local_extern(Symbol name, TypeExpr* type, Symbol external_name, Expr* sube
 {
     Expr* result = expr(EXTERN_EXPR);
     result->ext.name = name;
-    result->ext.type = type;
+    result->ext.functype = type;    // call functype since exprs have types
     result->ext.external_name = external_name;
     result->ext.subexpr = subexpr;
 
@@ -520,8 +563,12 @@ void print_expr(FILE* out, const Expr* expr)
     case STRVAL:
         fprintf(out, "string \"%s\"", expr->strval);
         break;
+    case RECFUNC_EXPR:
     case FUNC_EXPR:
-        fprintf(out, "func %s ", expr->func.name);
+        if (expr->tag == RECFUNC_EXPR)
+            fprintf(out, "recfunc %s ", expr->func.name);
+        else
+            fprintf(out, "func %s ", expr->func.name);
         if (expr->func.functype) {
             fputs(": ", out);
             print_typexpr(out, expr->func.functype);
@@ -564,7 +611,7 @@ void print_expr(FILE* out, const Expr* expr)
     case EXTERN_EXPR:
         fprintf(out, "external %s \"%s\" : ", expr->ext.name,
                 expr->ext.external_name);
-        print_typexpr(out, expr->ext.type);
+        print_typexpr(out, expr->ext.functype);
         fputs(" 'in ", out);
         print_expr(out, expr->func.subexpr);
         break;
@@ -582,9 +629,14 @@ void print_declaration(FILE* out, const Declaration* decl)
 {
     fputc('(', out);
     switch (decl->tag) {
+    case DECL_RECFUNC:
     case DECL_FUNC:
-        fprintf(out, "func %s ", decl->func.name);
+        if (decl->tag == DECL_RECFUNC)
+            fprintf(out, "recfunc %s ", decl->func.name);
+        else
+            fprintf(out, "func %s ", decl->func.name);
         print_params(out, decl->func.params);
+        fputc(' ', out);
         print_expr(out, decl->func.body);
         break;
     case DECL_BIND:

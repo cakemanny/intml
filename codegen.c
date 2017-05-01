@@ -775,6 +775,10 @@ static void gen_stack_machine_code(Expr* expr)
             fprintf(cgenout, "	leaq	L%d(%s), %s\n", lvalue, "%rip", r1);
             break;
         }
+        case RECFUNC_EXPR:
+        {
+            assert(0 && "TODO: think about recursive functions...");
+        }
         case FUNC_EXPR:
         {
             // Allocate a function object on the stack
@@ -909,7 +913,7 @@ static void gen_stack_machine_code(Expr* expr)
             store(-varx.stack_offset, bp, r0);
 
             Var* pre_param_stack_ptr = var_stack_ptr;
-            push_var(expr->ext.name, expr->ext.type);
+            push_var(expr->ext.name, expr->ext.functype);
             gen_stack_machine_code(expr->ext.subexpr);
             var_stack_ptr = pre_param_stack_ptr;
             break;
@@ -1112,6 +1116,7 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
       case INTVAL:
       case STRVAL:
         break;
+      case RECFUNC_EXPR: /* TODO make me different */
       case FUNC_EXPR:
       {
         Var* pre_param_stack_ptr = var_stack_ptr;
@@ -1191,7 +1196,7 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
       case EXTERN_EXPR:
       {
         Var* saved_stack_ptr = var_stack_ptr;
-        add_var_to_locals(curr_func, expr->ext.name, expr->ext.type);
+        add_var_to_locals(curr_func, expr->ext.name, expr->ext.functype);
         expr->ext.var_id = (var_stack_ptr - 1)->var_id;
         calculate_activation_records_expr(expr->ext.subexpr, curr_func);
         var_stack_ptr = saved_stack_ptr;
@@ -1226,6 +1231,11 @@ static void rewrite_functions(Expr* expr)
       case INTVAL:
       case STRVAL:
         break;
+      case RECFUNC_EXPR:
+      {
+        assert(0 && "TODO: RECFUNC_EXPR rewrite");
+        break;
+      }
       case FUNC_EXPR:
       {
         if (expr->func.params->next) {
@@ -1322,13 +1332,24 @@ Expr* restructure_tree(DeclarationList* root)
             return restructure_tree(root->next);
           case DECL_FUNC:
           {
-            Expr* newnode = local_func(
+            Expr* newnode = local_func_w_type(
                     decl->func.name,
                     decl->func.params,
+                    decl->func.type,
                     decl->func.body,
                     restructure_tree(root->next));
             newnode->type = newnode->func.subexpr->type;
-            newnode->func.functype = decl->func.type;
+            return newnode;
+          }
+          case DECL_RECFUNC:
+          {
+              Expr* newnode = local_recfunc_w_type(
+                    decl->func.name,
+                    decl->func.params,
+                    decl->func.type,
+                    decl->func.body,
+                    restructure_tree(root->next));
+            newnode->type = newnode->func.subexpr->type;
             return newnode;
           }
           case DECL_BIND:

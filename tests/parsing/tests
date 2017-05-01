@@ -11,7 +11,19 @@ expect () {
     fi
 }
 
+# check we order type tuples correctly
 expect "type x = a * b * c" "((type x (a * b * c)))"
 expect "type x = (a * b) * c" "((type x ((a * b) * c)))"
 expect "type x = a * (b * c)" "((type x (a * (b * c))))"
+
+# function types associate to the right
+expect "type t = a -> b -> c" "((type t (a -> (b -> c))))"
+
+# unit parens can be separated
+expect "let x = ()" "((let (pattern x) (unit ())))"
+
+expect "let x = [1]" "((let (pattern x) (list ((int 1)))))"
+expect "let x = [|1|]" "((let (pattern x) (vector ((int 1)))))"
+
+expect "let rec f x = x" "((recfunc f ((param x)) (var x)))"
 

@@ -81,6 +81,7 @@ WS      [ \t\f\v\r]
 
  /* keywords */
 let             { return LET; }
+rec             { return REC; }
 in              { return IN; }
 type            { return TYPE; }
 if              { return IF; }
@@ -90,7 +91,6 @@ external        { return EXTERNAL; }
 
  /* built in types*/
 {INT}           { yylval.intval = atoi(yytext); return INT; }
-"()"            { return UNIT; }
 
 {ID}            { yylval.identifier = symbol(yytext); return ID; }
  /* actually constructor */

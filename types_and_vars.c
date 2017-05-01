@@ -275,6 +275,7 @@ for (typeof(*list)* varname = list; varname; varname = varname->next) { \
     body \
 }
 
+__attribute__((warn_unused_result))
 __pure static _Bool solid_type(TypeExpr* type)
 {
     if (!type)
@@ -340,6 +341,7 @@ static TypeExprList* replaced_constraint_list(
     return result;
 }
 
+__attribute__((warn_unused_result))
 static TypeExpr* replaced_constraint(
         TypeExpr* toreplace, int constraint_id, TypeExpr* theory)
 {
@@ -366,6 +368,13 @@ static TypeExpr* replaced_constraint(
     abort(); // shouln't be possible
 }
 
+static void replace_constraint_if_needed(
+        TypeExpr** ptoreplace, int constraint_id, TypeExpr* theory)
+{
+    if (type_uses_constraint(*ptoreplace, constraint_id)) {
+        *ptoreplace = replaced_constraint(*ptoreplace, constraint_id, theory);
+    }
+}
 /*
  * Replace the uses of type variables with given constraint_id with theory
  */
@@ -374,17 +383,13 @@ static void apply_theory_params(
 {
     for (; params; params = params->next) {
         Param* p = params->param;
-        if (type_uses_constraint(p->type, constraint_id)) {
-            p->type = replaced_constraint(p->type, constraint_id, theory);
-        }
+        replace_constraint_if_needed(&p->type, constraint_id, theory);
     }
 }
 
 static void apply_theory_pat(Pattern* pat, int constraint_id, TypeExpr* theory)
 {
-    if (type_uses_constraint(pat->type, constraint_id)) {
-        pat->type = replaced_constraint(pat->type, constraint_id, theory);
-    }
+    replace_constraint_if_needed(&pat->type, constraint_id, theory);
     switch (pat->tag)
     {
       case PAT_VAR:
@@ -402,9 +407,7 @@ static void apply_theory_pat(Pattern* pat, int constraint_id, TypeExpr* theory)
  */
 static void apply_theory_expr(Expr* expr, int constraint_id, TypeExpr* theory)
 {
-    if (type_uses_constraint(expr->type, constraint_id)) {
-        expr->type = replaced_constraint(expr->type, constraint_id, theory);
-    }
+    replace_constraint_if_needed(&expr->type, constraint_id, theory);
     switch (expr->tag)
     {
       case PLUS:
@@ -423,14 +426,14 @@ static void apply_theory_expr(Expr* expr, int constraint_id, TypeExpr* theory)
       case INTVAL: // Nothing to do here
       case STRVAL:
         break;
+      case RECFUNC_EXPR:
       case FUNC_EXPR:
         apply_theory_params(expr->func.params, constraint_id, theory);
         apply_theory_expr(expr->func.body, constraint_id, theory);
         apply_theory_expr(expr->func.subexpr, constraint_id, theory);
-        if (type_uses_constraint(expr->func.functype, constraint_id)) {
-            expr->func.functype = replaced_constraint(expr->func.functype,
-                    constraint_id, theory);
-        }
+
+        replace_constraint_if_needed(&expr->func.functype, constraint_id, theory);
+        replace_constraint_if_needed(&expr->func.resulttype, constraint_id, theory);
         break;
       case BIND_EXPR:
         apply_theory_pat(expr->binding.pattern, constraint_id, theory);
@@ -467,25 +470,22 @@ static void apply_theory(
         {
           case DECL_EXTERN:
           case DECL_TYPE:
-           break;
+            break;
           case DECL_BIND:
           {
-            if (type_uses_constraint(decl->binding.type, constraint_id)) {
-              decl->binding.type = // leak leak leak - potentially
-                  replaced_constraint(decl->binding.type,
-                          constraint_id, theory);
-            }
+            replace_constraint_if_needed(
+                    &decl->binding.type, constraint_id, theory);
+
             apply_theory_pat(decl->binding.pattern, constraint_id, theory);
             apply_theory_expr(decl->binding.init, constraint_id, theory);
             break;
           }
+          case DECL_RECFUNC:
           case DECL_FUNC:
           {
-            if (type_uses_constraint(decl->func.type, constraint_id)) {
-              decl->func.type = // leak leak leak
-                  replaced_constraint(decl->func.type,
-                          constraint_id, theory);
-            }
+            replace_constraint_if_needed(&decl->func.type, constraint_id, theory);
+            replace_constraint_if_needed(&decl->func.resulttype, constraint_id, theory);
+
             apply_theory_params(decl->func.params, constraint_id, theory);
             apply_theory_expr(decl->func.body, constraint_id, theory);
             break;
@@ -507,7 +507,6 @@ static int len_typelist(int acc, TypeExprList* list)
  * Attempt to add a theory that these types are equal. Which we will later
  * try to unify
  */
-//__attribute__((warn_unused_result))
 static int theorise_equal(TypeExpr* etype, TypeExpr* newtype)
 {
     switch (etype->tag) {
@@ -603,8 +602,8 @@ static const char* expr_name(enum ExprTag tag)
         "", "plus", "minus", "multiply", "divide",
         "equal",
         "less than", "less than or equal",
-        "apply", "var", "unit", "int", "string", "func", "let", "if",
-        "list", "vector", "tuple"
+        "apply", "var", "unit", "int", "string", "recfunc",
+        "func", "let", "if", "list", "vector", "tuple"
     };
     return expr_name[tag];
 }
@@ -948,6 +947,7 @@ static int deducetype_expr(Expr* expr)
         assert(typexpr_equals(string_type, expr->type));
         return 0;
       }
+      case RECFUNC_EXPR: /* TODO: make these different */
       case FUNC_EXPR:
       {
         int types_added = 0;
@@ -960,18 +960,29 @@ static int deducetype_expr(Expr* expr)
 
         for (const ParamList* c = expr->func.params; c; c = c->next) {
             if (!c->param->type && c->param->name == symbol("()")) {
-                c->param->type = lookup_typexpr(symbol("unit"));
+                c->param->type = unit_type;
                 types_added++;
             }
             push_var(c->param->name, c->param->type);
         }
         struct Var* post_param_stack_ptr = var_stack_ptr;
 
+        if (expr->tag == RECFUNC_EXPR) {
+            /* make the name available before body */
+            push_var(expr->func.name, expr->func.functype);
+        }
+
         /*
          * type the body of the function that is being defined
          */
         types_added += deducetype_expr(expr->func.body);
         TypeExpr* bodytype = expr->func.body->type;
+
+        if (expr->func.resulttype) {
+            typexpr_conforms_or_exit(expr->func.resulttype, bodytype,
+                    "body of function %s", expr->func.name);
+            types_added += theorise_equal(bodytype, expr->func.resulttype);
+        }
 
         /*
          * When restore the stack pointer we should ideally be checking
@@ -1077,7 +1088,6 @@ static int deducetype_expr(Expr* expr)
                 init_type);
 
         struct Var* saved_stack_ptr = var_stack_ptr;
-        //push_var(expr->binding.name, init_type);
         pattern_match_and_push_vars(expr->binding.pattern, init_type);
 
         types_added += deducetype_expr(expr->binding.subexpr);
@@ -1199,6 +1209,7 @@ static int deducetype_expr(Expr* expr)
     abort(); // Shouldn't be possible to get here
 }
 
+__attribute__((warn_unused_result))
 __pure static _Bool declares_name_pat(Pattern* pat, Symbol name)
 {
     switch (pat->tag) {
@@ -1212,9 +1223,11 @@ __pure static _Bool declares_name_pat(Pattern* pat, Symbol name)
 /*
  * A helper function for accessing the name of any of the declaration types
  */
+__attribute__((warn_unused_result))
 __pure static _Bool declares_name(Declaration* declaration, Symbol name)
 {
     switch (declaration->tag) {
+        case DECL_RECFUNC:
         case DECL_FUNC: return declaration->func.name == name;
         case DECL_BIND: return declares_name_pat(
                                 declaration->binding.pattern, name);
@@ -1223,6 +1236,7 @@ __pure static _Bool declares_name(Declaration* declaration, Symbol name)
     }
     abort();
 }
+__attribute__((warn_unused_result))
 __pure static TypeExpr** decl_type_ptr_pat(Pattern* pat, Symbol name)
 {
     switch (pat->tag) {
@@ -1239,9 +1253,11 @@ __pure static TypeExpr** decl_type_ptr_pat(Pattern* pat, Symbol name)
         }
     }
 }
+__attribute__((warn_unused_result))
 __pure static TypeExpr** decl_type_ptr(Declaration* declaration, Symbol name)
 {
     switch (declaration->tag) {
+        case DECL_RECFUNC:
         case DECL_FUNC: return &declaration->func.type;
         case DECL_BIND: return decl_type_ptr_pat(
                                 declaration->binding.pattern, name);
@@ -1256,6 +1272,7 @@ __pure static TypeExpr** decl_type_ptr(Declaration* declaration, Symbol name)
  * Note, the type of a type declaration doesn't really fit the semantics of
  * the other types of declarations
  */
+__attribute__((warn_unused_result))
 __pure static TypeExpr* decl_type(Declaration* declaration, Symbol name)
 {
     return *decl_type_ptr(declaration, name);
@@ -1304,6 +1321,7 @@ static void type_and_check_exhaustively(DeclarationList* root)
                 pattern_match_and_push_vars(binding.pattern, binding.type);
                 break;
               }
+              case DECL_RECFUNC: /* TODO: make this diff for rec funcs */
               case DECL_FUNC:
               {
                 /* !!! A lot of this is a direct copy of work above
@@ -1325,8 +1343,20 @@ static void type_and_check_exhaustively(DeclarationList* root)
                 }
                 struct Var* post_param_stack_ptr = var_stack_ptr;
 
+                if (decl->tag == DECL_RECFUNC) {
+                    /* make the name available before body */
+                    push_var(decl->func.name, decl->func.type);
+                }
+
                 types_added += deducetype_expr(decl->func.body);
                 TypeExpr* bodytype = decl->func.body->type;
+
+                if (decl->func.resulttype) {
+                    typexpr_conforms_or_exit(decl->func.resulttype, bodytype,
+                            "body of toplevel function %s", decl->func.name);
+                    types_added +=
+                        theorise_equal(bodytype, decl->func.resulttype);
+                }
 
                 struct Var* begin = pre_param_stack_ptr;
                 for (const ParamList* c = decl->func.params; c; c = c->next) {
@@ -1460,11 +1490,8 @@ static void type_and_check_exhaustively(DeclarationList* root)
                 // reference us in the branches of a type
                 for (int j = 0; j < i; j++) {
                     TypeExpr** theory_j = constraint_theories + j;
-                    if (*theory_j
-                            && type_uses_constraint(*theory_j, i)) {
-                        *theory_j = replaced_constraint(*theory_j, i,
-                                constraint_theories[i]);
-                    }
+                    replace_constraint_if_needed(
+                            theory_j, i, constraint_theories[i]);
                 }
                 ++types_added; // avoid loop end
 
@@ -1568,6 +1595,7 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
       case STRVAL:
         assert(expr->type != NULL); // should damn well be typed
         break;
+      case RECFUNC_EXPR:
       case FUNC_EXPR:
       {
         if (!solid_type(expr->func.functype)) {
@@ -1643,6 +1671,7 @@ static _Bool check_if_fully_typed_root(DeclarationList* root)
             // Only incorrect if names were not found.
             // This is enforced by the type checker
             break;
+          case DECL_RECFUNC:
           case DECL_FUNC:
           {
             SymList* hierachy = symbol_list(decl->func.name);
@@ -1734,6 +1763,7 @@ void check_runtime_properties(DeclarationList* root)
                   case DECL_BIND: return;
                   case DECL_TYPE: break; // don't care about type
                   case DECL_EXTERN: return; // Should we allow external main
+                  case DECL_RECFUNC: return; // not sure if this should be allowed
                 }
             } else if (decl->tag != DECL_TYPE) {
                 fprintf(stderr, EPFX"main has incorrect type\n");

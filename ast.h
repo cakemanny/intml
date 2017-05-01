@@ -43,6 +43,7 @@ struct DeclarationList {
 struct Func {
     Symbol name;
     ParamList* params;
+    TypeExpr* resulttype;
     Expr* body;
 
     TypeExpr* type;
@@ -72,6 +73,7 @@ struct Declaration {
         DECL_BIND,
         DECL_TYPE,
         DECL_EXTERN,
+        DECL_RECFUNC,
     }               tag;
     union {
         Func        func;
@@ -100,6 +102,7 @@ struct Param {
 struct FuncExpr {
     Symbol name;
     ParamList* params;
+    TypeExpr* resulttype;
     Expr* body;
     Expr* subexpr;
 
@@ -120,7 +123,7 @@ struct BindExpr {
 
 struct ExternExpr {
     Symbol name;
-    TypeExpr* type;
+    TypeExpr* functype;
     Symbol external_name;
     Expr* subexpr;
 
@@ -142,6 +145,7 @@ struct Expr {
         INTVAL,
         STRVAL,
         FUNC_EXPR,
+        RECFUNC_EXPR,
         BIND_EXPR,
         IF_EXPR,
         LIST,
@@ -161,7 +165,7 @@ struct Expr {
         };
         int         intval;     /* INTVAL */
         Symbol      strval;     /* STRVAL */
-        FuncExpr    func;       /* FUNC_EXPR */
+        FuncExpr    func;       /* FUNC_EXPR, RECFUNC_EXPR */
         BindExpr    binding;    /* BIND_EXPR */
         struct { /* IF_EXPR */
             Expr*   condition;
@@ -279,6 +283,18 @@ DeclarationList* reverse_declarations(DeclarationList* list);
 Declaration* func(Symbol name, ParamList* params, Expr* body);
 
 /*
+ * Create a global function with an explicit type specified in the program
+ */
+Declaration* func_w_type(
+        Symbol name, ParamList* params, TypeExpr* type, Expr* body);
+
+/*
+ * Create a recursive function which can refer to it's name within its body
+ */
+Declaration* recfunc_w_type(
+        Symbol name, ParamList* params, TypeExpr* type, Expr* body);
+
+/*
  * Create a global binding node
  */
 Declaration* binding(Pattern* pattern, Expr* init);
@@ -361,6 +377,21 @@ Expr* strval(Symbol text);
  * the binding
  */
 Expr* local_func(Symbol name, ParamList* params, Expr* body, Expr* subexpr);
+
+Expr* local_func_w_type(
+        Symbol name, ParamList* params, TypeExpr* resulttype,
+        Expr* body, Expr* subexpr);
+
+/*
+ * Creates a recursive function node, where-by the body can refer to the
+ * function name
+ */
+Expr* local_recfunc(Symbol name, ParamList* params, Expr* body, Expr* subexpr);
+
+Expr* local_recfunc_w_type(
+        Symbol name, ParamList* params, TypeExpr* resulttype, Expr* body,
+        Expr* subexpr);
+
 
 /*
  * Creates a local variable binding and subexpression node which uses
