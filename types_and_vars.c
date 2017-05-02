@@ -956,6 +956,11 @@ static int deducetype_expr(Expr* expr)
          * restore stack, add the definition and type of the func
          * type the subexpr where the func is now defined
          */
+        struct Var* pre_func_name_stack_ptr = var_stack_ptr;
+        if (expr->tag == RECFUNC_EXPR) {
+            /* make the name available before body */
+            push_var(expr->func.name, expr->func.functype);
+        }
         struct Var* pre_param_stack_ptr = var_stack_ptr;
 
         for (const ParamList* c = expr->func.params; c; c = c->next) {
@@ -967,10 +972,6 @@ static int deducetype_expr(Expr* expr)
         }
         struct Var* post_param_stack_ptr = var_stack_ptr;
 
-        if (expr->tag == RECFUNC_EXPR) {
-            /* make the name available before body */
-            push_var(expr->func.name, expr->func.functype);
-        }
 
         /*
          * type the body of the function that is being defined
@@ -1053,7 +1054,9 @@ static int deducetype_expr(Expr* expr)
         }
 
         var_stack_ptr = pre_param_stack_ptr;
-        push_var(expr->func.name, expr->func.functype);
+        if (expr->tag != RECFUNC_EXPR) {
+            push_var(expr->func.name, expr->func.functype);
+        }
 
         /*
          * type the subexpr of the func expr
@@ -1072,7 +1075,7 @@ static int deducetype_expr(Expr* expr)
             types_added++;
         }
 
-        var_stack_ptr = pre_param_stack_ptr;
+        var_stack_ptr = pre_func_name_stack_ptr;
         return types_added;
       }
       case BIND_EXPR:
@@ -1332,6 +1335,11 @@ static void type_and_check_exhaustively(DeclarationList* root)
                  * Basic idea: push params onto var stack, type func body
                  * restore stack, add the definition and type of the func
                  */
+                if (decl->tag == DECL_RECFUNC) {
+                    /* make the name available before body */
+                    push_var(decl->func.name, decl->func.type);
+                }
+
                 struct Var* pre_param_stack_ptr = var_stack_ptr;
 
                 for (const ParamList* c = decl->func.params; c; c = c->next) {
@@ -1342,11 +1350,6 @@ static void type_and_check_exhaustively(DeclarationList* root)
                     push_var(c->param->name, c->param->type);
                 }
                 struct Var* post_param_stack_ptr = var_stack_ptr;
-
-                if (decl->tag == DECL_RECFUNC) {
-                    /* make the name available before body */
-                    push_var(decl->func.name, decl->func.type);
-                }
 
                 types_added += deducetype_expr(decl->func.body);
                 TypeExpr* bodytype = decl->func.body->type;
@@ -1433,7 +1436,9 @@ static void type_and_check_exhaustively(DeclarationList* root)
 
                 // restore stack and push func decl
                 var_stack_ptr = pre_param_stack_ptr;
-                push_var(decl->func.name, decl->func.type);
+                if (decl->tag != DECL_RECFUNC) {
+                    push_var(decl->func.name, decl->func.type);
+                }
                 break;
               }
               case DECL_EXTERN:

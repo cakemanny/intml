@@ -102,6 +102,18 @@ typedef struct Function {
 static Function function_table[MAX_FNS];
 static int fn_table_count = 0;
 
+/*
+ * A fifo of the function bodies so that we can emit them sequentially
+ * rather than nested
+ */
+typedef struct BodiesToEmit {
+    Function* function;
+    Expr* body;
+} BodiesToEmit;
+static BodiesToEmit bodies[MAX_FNS];
+BodiesToEmit* bodies_begin = bodies;
+BodiesToEmit* bodies_end = bodies;
+
 #define VAR_MAX 1024
 static struct Var {
     Symbol name;
@@ -186,21 +198,6 @@ static void push_var(Symbol name, TypeExpr* type)
     assert(var_stack_ptr < variable_stack + VAR_MAX);
     assert(type != NULL); // We should be fully typed at this point
     *var_stack_ptr++ = (Var){ .name = name, .type = type, .var_id = -1 };
-}
-static void push_vars_pat(Pattern* pat)
-{
-    switch (pat->tag)
-    {
-      case PAT_VAR:
-        push_var(pat->name, pat->type);
-        break;
-      case PAT_DISCARD:
-        break;
-      case PAT_CONS:
-        push_vars_pat(pat->left);
-        push_vars_pat(pat->right);
-        break;
-    }
 }
 
 /*
@@ -491,6 +488,10 @@ static char* function_label(Function* func)
 // this will need a definition of local vars
 static void emit_fn_prologue(Function* func)
 {
+#ifdef __x86_64__
+    // align function start to 2^4=16 byte boundary
+    fprintf(cgenout, ".p2align 4, 0x90\n");
+#endif
     char* lbl = function_label(func);
     fprintf(cgenout, "%s:\n", lbl);
     free(lbl);
@@ -776,33 +777,22 @@ static void gen_stack_machine_code(Expr* expr)
             break;
         }
         case RECFUNC_EXPR:
-        {
-            assert(0 && "TODO: think about recursive functions...");
-        }
         case FUNC_EXPR:
         {
             // Allocate a function object on the stack
             // Allocate the closure for said function and fill with
             // required values
 
-            // Create a label to go after the function
-            // Emit Jump to after function
-            // Emit function definition
+            // Add function definition body to BodiesToEmit FIFO
             // Emit expression where function is defined
-            int after_function = request_label();
-            b(after_function);
-            Var* pre_param_stack_ptr = var_stack_ptr;
+
             Function* func = function_table + expr->func.function_id;
-            for (ParamList* c = expr->func.params; c; c = c->next) {
-                push_var(c->param->name, c->param->type);
-                emit_fn_prologue(func);
-                // Should not be possible since we rewrote the tree to
-                // be single param only
-                assert(c->next == NULL && "multi-params fns not supported");
-            }
-            gen_stack_machine_code(expr->func.body);
-            emit_fn_epilogue(func);
-            label(after_function);
+            assert(expr->func.params->next == NULL && "multi-params fns not supported");
+
+            *bodies_end++ = (BodiesToEmit){
+                .function = func, .body = expr->func.body
+            };
+
             assert(expr->func.var_id != -1);
             assert(expr->func.var_id < var_table_count);
             const VarEx varx = variable_table[expr->func.var_id];
@@ -843,10 +833,7 @@ static void gen_stack_machine_code(Expr* expr)
                 pop("%r12"); // restore r12 as per contract
             }
 
-            var_stack_ptr = pre_param_stack_ptr;
-            push_var(expr->func.name, expr->func.functype);
             gen_stack_machine_code(expr->func.subexpr);
-            var_stack_ptr = pre_param_stack_ptr;
             break;
         }
         case BIND_EXPR:
@@ -858,11 +845,7 @@ static void gen_stack_machine_code(Expr* expr)
             // Now the result is in r0 for ints but in r0 and r1 for funcs
             gen_sm_unapply_pat(binding->pattern);
 
-            Var* saved_stack_ptr = var_stack_ptr;
-            push_vars_pat(binding->pattern);
-
             gen_stack_machine_code(binding->subexpr);
-            var_stack_ptr = saved_stack_ptr;
             break;
         }
         case IF_EXPR:
@@ -912,10 +895,7 @@ static void gen_stack_machine_code(Expr* expr)
             fprintf(cgenout, "\tleaq\t%s(%s), %s\n", lbl, "%rip", r0);
             store(-varx.stack_offset, bp, r0);
 
-            Var* pre_param_stack_ptr = var_stack_ptr;
-            push_var(expr->ext.name, expr->ext.functype);
             gen_stack_machine_code(expr->ext.subexpr);
-            var_stack_ptr = pre_param_stack_ptr;
             break;
         }
     }
@@ -1119,6 +1099,11 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
       case RECFUNC_EXPR: /* TODO make me different */
       case FUNC_EXPR:
       {
+        Var* pre_func_name_stack_ptr = var_stack_ptr;
+        if (expr->tag == RECFUNC_EXPR) {
+            add_var_to_locals(curr_func, expr->func.name, expr->func.functype);
+            expr->func.var_id = (var_stack_ptr - 1)->var_id;
+        }
         Var* pre_param_stack_ptr = var_stack_ptr;
         Function* pre_param_curr_func = curr_func;
         {
@@ -1157,13 +1142,15 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
         var_stack_ptr = pre_param_stack_ptr;
         curr_func = pre_param_curr_func;
 
-        add_var_to_locals(curr_func, expr->func.name, expr->func.functype);
-        expr->func.var_id = (var_stack_ptr - 1)->var_id;
+        if (expr->tag != RECFUNC_EXPR) {
+            add_var_to_locals(curr_func, expr->func.name, expr->func.functype);
+            expr->func.var_id = (var_stack_ptr - 1)->var_id;
+        }
 
         // recurse
         calculate_activation_records_expr(expr->func.subexpr, curr_func);
 
-        var_stack_ptr = pre_param_stack_ptr;
+        var_stack_ptr = pre_func_name_stack_ptr;
         break;
       }
       case BIND_EXPR:
@@ -1232,10 +1219,8 @@ static void rewrite_functions(Expr* expr)
       case STRVAL:
         break;
       case RECFUNC_EXPR:
-      {
-        assert(0 && "TODO: RECFUNC_EXPR rewrite");
-        break;
-      }
+        // outer-most function needs to be recursive  inner don't
+        // fall-through to normal func
       case FUNC_EXPR:
       {
         if (expr->func.params->next) {
@@ -1263,6 +1248,7 @@ static void rewrite_functions(Expr* expr)
                 = body->type;
         }
         rewrite_functions(expr->func.subexpr);
+        break;
       }
       case BIND_EXPR:
       {
@@ -1335,10 +1321,11 @@ Expr* restructure_tree(DeclarationList* root)
             Expr* newnode = local_func_w_type(
                     decl->func.name,
                     decl->func.params,
-                    decl->func.type,
+                    decl->func.resulttype,
                     decl->func.body,
                     restructure_tree(root->next));
             newnode->type = newnode->func.subexpr->type;
+            newnode->func.functype = decl->func.type;
             return newnode;
           }
           case DECL_RECFUNC:
@@ -1346,10 +1333,11 @@ Expr* restructure_tree(DeclarationList* root)
               Expr* newnode = local_recfunc_w_type(
                     decl->func.name,
                     decl->func.params,
-                    decl->func.type,
+                    decl->func.resulttype,
                     decl->func.body,
                     restructure_tree(root->next));
             newnode->type = newnode->func.subexpr->type;
+            newnode->func.functype = decl->func.type;
             return newnode;
           }
           case DECL_BIND:
@@ -1418,12 +1406,17 @@ void codegen(DeclarationList* root)
         exit(EXIT_FAILURE);
     }
 
-    // start by not allowing any functions other than main
-    // only compile expressions
     emit_header();
     emit_fn_prologue(curr_func);
     gen_stack_machine_code(newroot);
     emit_fn_epilogue(curr_func);
+
+    for (; bodies_begin < bodies_end; bodies_begin++)
+    {
+        emit_fn_prologue(bodies_begin->function);
+        gen_stack_machine_code(bodies_begin->body);
+        emit_fn_epilogue(bodies_begin->function);
+    }
 
     fprintf(cgenout, "\n.data\n");
     fseeko(dataout, SEEK_SET, 0);
