@@ -121,11 +121,26 @@ expect_pass "let x = ([| |] : string vector)"
 expect_fail "let x = [] = [||]"
 expect_fail "let x = [ 1 ] = [| 1 |]"
 
-#pattern matching
+# pattern matching
 expect_fail "let x :: y = []";
 expect_pass "let x :: y = [ 1 ]";
 expect_pass "let x :: y = [ 1 ; 2 ]";
 expect_pass "let head xs = let x::_ = xs in x  let y = head [1;2;3]"
+# should not be possible to mismatch structures. e.g. can't try to extract the
+# head of an int
+expect_fail "let x::_ = 1"
+# can discard anything...
+expect_pass "let _ = 1"
+expect_pass "let _ = [ 1 ]"
+expect_pass 'let _ = "1"'
+expect_pass 'let _ = [| 1 |]'
+# match expressions
+expect_pass "let x = match 1 with y -> y"
+expect_pass "let x = match [2] with y::_ -> y"
+expect_pass "let x = match [2] with y::_ -> y | _ -> 0"
+# cases must match in type
+expect_fail "let x = match 1 with _ -> 10 | _ -> [ 0 ]"
+expect_fail "let x = match 1 with _ -> 10 | _ -> 0 | _ -> [ 0 ]"
 
 # type aliases
 expect_pass "type metre = int   let f (w:metre) (h:metre) = w * h / 2"

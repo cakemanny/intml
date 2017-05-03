@@ -31,4 +31,7 @@ expect "let rec f x = x" "((recfunc f ((param x)) (var x)))"
 
 expect "let x = match xs with x::_ -> 1 | _ -> 2" \
     "((let (pattern x) (match (var xs) ((pattern cons (pattern x) (pattern _)) (int 1) (pattern _) (int 2)))))"
+# same thing but with leading |
+expect "let x = match xs with | x::_ -> 1 | _ -> 2" \
+    "((let (pattern x) (match (var xs) ((pattern cons (pattern x) (pattern _)) (int 1) (pattern _) (int 2)))))"
 

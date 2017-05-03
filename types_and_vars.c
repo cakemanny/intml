@@ -375,6 +375,10 @@ static void replace_constraint_if_needed(
         *ptoreplace = replaced_constraint(*ptoreplace, constraint_id, theory);
     }
 }
+
+// pre-declare because recursive calls
+static void apply_theory_expr(Expr* expr, int constraint_id, TypeExpr* theory);
+
 /*
  * Replace the uses of type variables with given constraint_id with theory
  */
@@ -399,6 +403,14 @@ static void apply_theory_pat(Pattern* pat, int constraint_id, TypeExpr* theory)
         apply_theory_pat(pat->left, constraint_id, theory);
         apply_theory_pat(pat->right, constraint_id, theory);
         break;
+    }
+}
+
+static void apply_theory_cases(CaseList* cases, int constraint_id, TypeExpr* theory)
+{
+    for (; cases; cases = cases->next) {
+        apply_theory_pat(cases->kase->pattern, constraint_id, theory);
+        apply_theory_expr(cases->kase->expr, constraint_id, theory);
     }
 }
 
@@ -454,6 +466,10 @@ static void apply_theory_expr(Expr* expr, int constraint_id, TypeExpr* theory)
         break;
       case EXTERN_EXPR:
         assert(expr->tag != EXTERN_EXPR && "not expected");
+        break;
+      case MATCH_EXPR:
+        apply_theory_expr(expr->matchexpr, constraint_id, theory);
+        apply_theory_cases(expr->cases, constraint_id, theory);
         break;
     }
 }
@@ -597,13 +613,13 @@ __attribute__((const))
 static const char* expr_name(enum ExprTag tag)
 {
     assert(tag != 0);
-    assert(tag <= TUPLE);
+    assert(tag <= MATCH_EXPR);
     const char* expr_name[] = {
         "", "plus", "minus", "multiply", "divide",
         "equal",
         "less than", "less than or equal",
         "apply", "var", "unit", "int", "string", "recfunc",
-        "func", "let", "if", "list", "vector", "tuple"
+        "func", "let", "if", "list", "vector", "tuple", "match"
     };
     return expr_name[tag];
 }
@@ -715,20 +731,19 @@ static void pattern_match_and_push_vars(Pattern* pat, TypeExpr* init_type)
             pattern_match_and_push_vars(pat->left, pat->left->type);
             pattern_match_and_push_vars(pat->right, pat->right->type);
 
-        } else if (init_type->tag == TYPE_CONSTRUCTOR) {
-            if (init_type->constructor == symbol("list")) {
-                pattern_match_and_push_vars(pat->left, init_type->param);
-                pattern_match_and_push_vars(pat->right, init_type);
-            } else {
-                tprintf(stderr,
-                        EPFX"expected list type in init for pattern %P\n", pat);
-                TypeExpr* expected = typeconstructor(
-                        typename(symbol("'a")), symbol("list"));
-                print_type_error(expected, init_type);
-                free((void*)expected->param); // cast away const :'(
-                free((void*)expected);
-                exit(EXIT_FAILURE);
-            }
+        } else if (init_type->tag == TYPE_CONSTRUCTOR
+                && init_type->constructor == symbol("list")) {
+            pattern_match_and_push_vars(pat->left, init_type->param);
+            pattern_match_and_push_vars(pat->right, init_type);
+        } else {
+            tprintf(stderr,
+                    EPFX"expected list type in init for pattern %P\n", pat);
+            TypeExpr* expected = typeconstructor(
+                    typename(symbol("'a")), symbol("list"));
+            print_type_error(expected, init_type);
+            free((void*)expected->param); // cast away const :'(
+            free((void*)expected);
+            exit(EXIT_FAILURE);
         }
 
         if (pat->type) {
@@ -1090,6 +1105,9 @@ static int deducetype_expr(Expr* expr)
         dbgtprintf("deduced type for pattern %P: %T\n", expr->binding.pattern,
                 init_type);
 
+        // FIXME: Need to check that the pattern is able to match the type
+        // of the init expression
+
         struct Var* saved_stack_ptr = var_stack_ptr;
         pattern_match_and_push_vars(expr->binding.pattern, init_type);
 
@@ -1203,11 +1221,47 @@ static int deducetype_expr(Expr* expr)
       {
         int types_added = 0;
         // TODO
+        assert(0 && "TODO: tuples");
         return types_added;
       }
       case EXTERN_EXPR:
         assert(expr->tag != EXTERN_EXPR && "not expected");
         break;
+      case MATCH_EXPR:
+      {
+        // The match expression needs to match the cases on the left
+        // The productions need to all be the same type - like a list
+        int types_added = deducetype_expr(expr->matchexpr);
+        for (CaseList* k = expr->cases; k; k = k->next) {
+            // TODO: Check that the patterns can match the type of matchexpr
+            pattern_match_and_push_vars(k->kase->pattern, expr->matchexpr->type);
+            struct Var* saved_stack_ptr = var_stack_ptr;
+            types_added += deducetype_expr(k->kase->expr);
+            var_stack_ptr = saved_stack_ptr;
+        }
+
+        CaseList* head = expr->cases;
+        TypeExpr* head_type = head->kase->expr->type;
+        int pos = 2;
+        for (CaseList* tail = head->next; tail; tail = tail->next, pos++) {
+            TypeExpr* tail_type = tail->kase->expr->type;
+            typexpr_conforms_or_exit(head_type, tail_type, "result "
+                    "expression of case %d of match expression has type "
+                    "not matching the first case", pos);
+            types_added += theorise_equal(head_type, tail_type);
+            types_added += theorise_equal(tail_type, head_type);
+        }
+
+        if (expr->type) {
+            typexpr_conforms_or_exit(head_type, expr->type, "match expression");
+            types_added += theorise_equal(expr->type, head_type);
+            types_added += theorise_equal(head_type, expr->type);
+        } else {
+            expr->type = head_type;
+            types_added++;
+        }
+        return types_added;
+      }
     }
     abort(); // Shouldn't be possible to get here
 }
@@ -1621,10 +1675,10 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
       }
       case BIND_EXPR:
       {
-        SymList* subhierachy = symbol_list_add(hierachy, expr->func.name);
-        result &= check_if_fully_typed_expr(expr->binding.init, subhierachy);
-        result &= check_if_fully_typed_expr(expr->binding.subexpr, subhierachy);
-        free(subhierachy);
+        // TODO: potentially add all the binding names to the hierachy?
+        // Do we want to check each binding name is typed?
+        result &= check_if_fully_typed_expr(expr->binding.init, hierachy);
+        result &= check_if_fully_typed_expr(expr->binding.subexpr, hierachy);
         if (!solid_type(expr->type)) {
             assert(result == 0); // better be covered by subexpr
         }
@@ -1645,23 +1699,36 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
       case LIST:
       case VECTOR:
       {
-          if (!solid_type(expr->type)) {
-              fprintf(stderr, EPFX"%s with no type\n", expr_name(expr->tag));
-              print_binding_hierachy(stderr, hierachy);
-              result = 0;
-          }
-          for (ExprList* l = expr->expr_list; l; l = l->next) {
-              result &= check_if_fully_typed_expr(l->expr, hierachy);
-          }
-          break;
+        if (!solid_type(expr->type)) {
+            fprintf(stderr, EPFX"%s with no type\n", expr_name(expr->tag));
+            print_binding_hierachy(stderr, hierachy);
+            result = 0;
+        }
+        for (ExprList* l = expr->expr_list; l; l = l->next) {
+            result &= check_if_fully_typed_expr(l->expr, hierachy);
+        }
+        break;
       }
       case TUPLE:
       {
-          assert(0 && "TODO: TUPLEs");
+        assert(0 && "TODO: TUPLEs");
+        break;
       }
       case EXTERN_EXPR:
         assert(expr->tag != EXTERN_EXPR && "not expected");
         break;
+      case MATCH_EXPR:
+      {
+        if (!solid_type(expr->type)) {
+          fprintf(stderr, EPFX"match expression with no type\n");
+          print_binding_hierachy(stderr, hierachy);
+          result = 0;
+        }
+        result &= check_if_fully_typed_expr(expr->matchexpr, hierachy);
+        for (CaseList* l = expr->cases; l; l = l->next) {
+            result &= check_if_fully_typed_expr(l->kase->expr, hierachy);
+        }
+      }
     }
     return result;
 }

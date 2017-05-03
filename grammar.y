@@ -60,7 +60,7 @@ static DeclarationList* tree = NULL;
 %type <kases> matchings
 %type <kase> matching
 
-%nonassoc LET IN TYPE EXTERNAL MATCH FUN FUNCTION
+%nonassoc LET IN TYPE EXTERNAL MATCH WITH FUN FUNCTION
 %right ARROW    /* function typexprs */
 %nonassoc '[' ']' VSTART VEND
 %right ';'
@@ -132,7 +132,6 @@ expr:
   | expr exprterm               { $$ = apply($1, $2); }
   | exprterm                    { $$ = $1; }
   | MATCH expr WITH matchings   { $$ = match($2, reverse_cases($4)); }
-  | MATCH expr WITH '|' matchings   { $$ = match($2, reverse_cases($5)); }
   ;
 exprterm:
     '(' expr ')'                { $$ = $2; }
@@ -172,6 +171,7 @@ nonemptylist:
   ;
 matchings:
     matchings '|' matching      { $$ = case_add($1, $3); }
+  | '|' matching                { $$ = caselist($2); } /* optional first | */
   | matching                    { $$ = caselist($1); }
   ;
 matching:
