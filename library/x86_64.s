@@ -22,9 +22,7 @@ ml__write$:
 	movq	%rsp, %rbp
 	movq	%rdi, %r10		    # addr closure
 	movq	(%r10), %rdi		# var fd closure word 1 - arg1
-	movq	%rdx, %r11		# save rdx
-	movq	%rsi, %rdx		# var msg local word 1 - length -arg3
-	movq	%r11, %rsi		# var msg local word 2 - ptr  -arg2
+	xchgq	%rdx, %rsi		# strings are len,char* but for write arg2 = char*, arg3 = len
 	callq   _write		# result goes in rax
 	popq	%rbp
 	retq

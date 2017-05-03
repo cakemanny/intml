@@ -756,6 +756,7 @@ static void gen_stack_machine_code(Expr* expr)
             // 1. Emit string constant into the constants area with a label
             // 2. Emit a load instruction
             int lvalue = request_label();
+            fputs(".p2align 3\n", dataout);
             fprintf(dataout, "L%d:\n", lvalue);
             fputs("\t.string \"", dataout);
             const char* s = expr->strval;
@@ -769,8 +770,9 @@ static void gen_stack_machine_code(Expr* expr)
             fputs("\"\n", dataout);
 
             int llen = request_label();
+            fputs(".p2align 3\n", dataout);
             fprintf(dataout, "L%d:\n", llen);
-            fprintf(dataout, "\t.word %lu\n", strlen(expr->strval));
+            fprintf(dataout, "\t.int %lu\n", strlen(expr->strval));
             fprintf(cgenout, "	leaq	L%d(%s), %s\n", llen, "%rip", t0);
             loadc(r0, t0, 0, "length of string");
             fprintf(cgenout, "	leaq	L%d(%s), %s\n", lvalue, "%rip", r1);
