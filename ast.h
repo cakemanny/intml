@@ -21,6 +21,8 @@ DECLARE_STRUCT( FuncExpr        );
 DECLARE_STRUCT( BindExpr        );
 DECLARE_STRUCT( ExternExpr      );
 DECLARE_STRUCT( ExprList        );
+DECLARE_STRUCT( Case            );
+DECLARE_STRUCT( CaseList        );
 
 /*
  * Declare types so that they are immutable as this has some nice properties
@@ -152,6 +154,7 @@ struct Expr {
         VECTOR,
         TUPLE,
         EXTERN_EXPR, /* not in the language - just for codegen */
+        MATCH_EXPR,
     }               tag;
     union {
         struct { /* PLUS - APPLY */
@@ -174,6 +177,10 @@ struct Expr {
         };
         ExprList*   expr_list; /* LIST, VECTOR, TUPLE */
         ExternExpr  ext;        /* EXTERN_EXPR */
+        struct { /* MATCH_EXPR */
+            Expr* matchexpr;
+            CaseList* cases;
+        };
     };
     /* We will want to be able to type all our expressions */
     TypeExpr*       type;
@@ -229,6 +236,16 @@ struct Pattern {
         };
     };
     TypeExpr* type;
+};
+
+struct Case {
+    Pattern* pattern;
+    Expr* expr;
+};
+
+struct CaseList {
+    Case* kase;
+    CaseList* next;
 };
 
 /*
@@ -426,6 +443,11 @@ Expr* local_extern(
         Symbol name, TypeExpr* type, Symbol external_name, Expr* subexpr);
 
 /*
+ * Creates a match expression node
+ */
+Expr* match(Expr* matchexpr, CaseList* cases);
+
+/*
  * Creates an empty list of expressions (used in compund expressions like lists 
  * and vectors
  */
@@ -490,9 +512,34 @@ TypeExprList* reversed_types(TypeExprList* list);
  */
 Pattern* pat_var(Symbol name);
 
+/*
+ * A pattern which discards the expresion it's matched against
+ */
 Pattern* pat_discard();
 
-Pattern* pat_list(Pattern* head, Pattern* tail);
+/*
+ * A pattern that matches the head and the tail of a list
+ */
+Pattern* pat_cons(Pattern* head, Pattern* tail);
 
+/*
+ * A case node for a match or function expression
+ */
+Case* matchcase(Pattern* pattern, Expr* expr);
+
+/*
+ * Create a case list with just one node (head)
+ */
+CaseList* caselist(Case* head);
+
+/*
+ *
+ */
+CaseList* case_add(CaseList* list, Case* kase);
+
+/*
+ * Reverses the list and returns the new head *Mutates the list*
+ */
+CaseList* reverse_cases(CaseList* list);
 
 #endif // __AST_H__

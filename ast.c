@@ -317,6 +317,14 @@ Expr* local_extern(Symbol name, TypeExpr* type, Symbol external_name, Expr* sube
     return result;
 }
 
+Expr* match(Expr* matchexpr, CaseList* cases)
+{
+    Expr* result = expr(MATCH_EXPR);
+    result->matchexpr = matchexpr;
+    result->cases = cases;
+    return result;
+}
+
 ExprList* exprlist()
 {
     return NULL;
@@ -429,12 +437,39 @@ Pattern* pat_discard()
     return pat(PAT_DISCARD);
 }
 
-Pattern* pat_list(Pattern* head, Pattern* tail)
+Pattern* pat_cons(Pattern* head, Pattern* tail)
 {
     struct Pattern* result = pat(PAT_CONS);
     result->left = head;
     result->right = tail;
     return result;
+}
+
+Case* matchcase(Pattern* pattern, Expr* expr)
+{
+    Case* result = xmalloc(sizeof *result);
+    result->pattern = pattern;
+    result->expr = expr;
+    return result;
+}
+
+CaseList* case_add(CaseList* list, Case* kase)
+{
+    CaseList* result = xmalloc(sizeof *result);
+    result->kase = kase;
+    result->next = list;
+    return result;
+}
+
+CaseList* caselist(Case* head)
+{
+    return case_add(NULL, head);
+}
+
+
+CaseList* reverse_cases(CaseList* list)
+{
+    REVERSE_LIST_IMPL(CaseList, list);
 }
 
 /*----------------------------------------*\
@@ -531,6 +566,20 @@ void print_pattern(FILE* out, const Pattern* pat)
     fputc(')', out);
 }
 
+void print_cases(FILE* out, const CaseList* list)
+{
+    fputc('(', out);
+    const char* prefix = ""; // all but first get space prefix
+    for (const CaseList* c = list; c; c = c->next) {
+        fputs(prefix, out);
+        print_pattern(out, c->kase->pattern);
+        fputc(' ', out);
+        print_expr(out, c->kase->expr);
+        prefix = " ";
+    }
+    fputc(')', out);
+}
+
 void print_expr(FILE* out, const Expr* expr)
 {
     fputc('(', out);
@@ -615,7 +664,12 @@ void print_expr(FILE* out, const Expr* expr)
         fputs(" 'in ", out);
         print_expr(out, expr->func.subexpr);
         break;
-
+    case MATCH_EXPR:
+        fprintf(out, "match ");
+        print_expr(out, expr->matchexpr);
+        fputc(' ', out);
+        print_cases(out, expr->cases);
+        break;
     }
     if (expr->type) {
         fprintf(out, " : ");

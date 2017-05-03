@@ -30,6 +30,8 @@ static DeclarationList* tree = NULL;
     Param*              param;
     TypeExpr*           typexpr;
     TypeExprList*       types;
+    Case*               kase;
+    CaseList*           kases;
 
 /* terminals */
     int                 intval;     // we should probably store these
@@ -39,7 +41,7 @@ static DeclarationList* tree = NULL;
     const char*         error_msg;
 }
 
-%token LET REC TYPE IN IF THEN ELSE
+%token LET REC TYPE IN IF THEN ELSE MATCH WITH FUNCTION FUN
 %token <intval> INT
 %token <text>   STR_LIT
 %token <identifier> ID TYPEID
@@ -55,15 +57,18 @@ static DeclarationList* tree = NULL;
 %type <expr> expr letexpr exprterm
 %type <typexpr> typexpr typeterm optionaltype
 %type <types> typetuple
+%type <kases> matchings
+%type <kase> matching
 
-%nonassoc LET IN TYPE EXTERNAL /* These are to make let bindings stick to top level if poss */
+%nonassoc LET IN TYPE EXTERNAL MATCH FUN FUNCTION
 %right ARROW    /* function typexprs */
 %nonassoc '[' ']' VSTART VEND
 %right ';'
 %nonassoc IF THEN ELSE
 %nonassoc ','
-%left '='       /* right in assignments but left in expressions */
+%left '=' '|'   /* right in assignments but left in expressions */
 %nonassoc '<' LE
+%right '^' '@'
 %right CONS
 %left '+' '-'
 %left '*' '/'
@@ -100,7 +105,7 @@ pattern:
     ID                          { $$ = pat_var($1); }
   | '(' pattern ')'             { $$ = $2; }
   | '_'                         { $$ = pat_discard(); }
-  | pattern CONS pattern        { $$ = pat_list($1, $3); }
+  | pattern CONS pattern        { $$ = pat_cons($1, $3); }
   ;
 params:
     params param                { $$ = add_param($1, $2); }
@@ -126,6 +131,8 @@ expr:
     /* but we need to disambiguate */
   | expr exprterm               { $$ = apply($1, $2); }
   | exprterm                    { $$ = $1; }
+  | MATCH expr WITH matchings   { $$ = match($2, reverse_cases($4)); }
+  | MATCH expr WITH '|' matchings   { $$ = match($2, reverse_cases($5)); }
   ;
 exprterm:
     '(' expr ')'                { $$ = $2; }
@@ -162,6 +169,13 @@ exprlist:
 nonemptylist:
     expr                    { $$ = add_expr(exprlist(), $1); }
   | expr ';' nonemptylist   { $$ = add_expr($3, $1); }
+  ;
+matchings:
+    matchings '|' matching      { $$ = case_add($1, $3); }
+  | matching                    { $$ = caselist($1); }
+  ;
+matching:
+    pattern ARROW expr          { $$ = matchcase($1, $3); }
   ;
 typexpr:
     typexpr ARROW typexpr       { $$ = typearrow($1, $3); }

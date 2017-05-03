@@ -7,7 +7,9 @@ expect () {
     if [[ "$result" == "$2" ]]; then
         echo "pass: $1  ==>  $2"
     else
-        echo "fail: $1  ==>  $result ~~ expected: $2"
+        echo "fail: $1  ==>"
+        echo "  expected: $2"
+        echo "    actual: $result"
     fi
 }
 
@@ -26,4 +28,7 @@ expect "let x = [1]" "((let (pattern x) (list ((int 1)))))"
 expect "let x = [|1|]" "((let (pattern x) (vector ((int 1)))))"
 
 expect "let rec f x = x" "((recfunc f ((param x)) (var x)))"
+
+expect "let x = match xs with x::_ -> 1 | _ -> 2" \
+    "((let (pattern x) (match (var xs) ((pattern cons (pattern x) (pattern _)) (int 1) (pattern _) (int 2)))))"
 

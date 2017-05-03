@@ -88,6 +88,10 @@ if              { return IF; }
 then            { return THEN; }
 else            { return ELSE; }
 external        { return EXTERNAL; }
+match           { return MATCH; }
+with            { return WITH; }
+function        { return FUNCTION; }
+fun             { return FUN; }
 
  /* built in types*/
 {INT}           { yylval.intval = atoi(yytext); return INT; }
@@ -101,7 +105,7 @@ external        { return EXTERNAL; }
 "::"            { return CONS; }
 "[|"            { return VSTART; }  /* vectors (not arrays) */
 "|]"            { return VEND; }
-[-+*/=<=():\[\];_,^]    { return yytext[0]; }
+[-+*/=<=():\[\];_,^|@]   { return yytext[0]; }
 
 {WS}            ; /* Drop whitespace */
 [\n]            { ++yylineno; }
