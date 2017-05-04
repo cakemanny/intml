@@ -93,6 +93,16 @@ match [1] with
 | _ -> 52
 " 51
 
+expect2 "
+let sum =
+  let rec go acc xs =
+    match xs with
+    | hd :: tail -> go (hd + acc) tail
+    | _ -> acc
+  in go 0
+let main () = sum [ 4; 3; 2; 1; 0 ]
+" 10
+
 
 
 # Exit with the number of failing tests

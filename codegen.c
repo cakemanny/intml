@@ -961,27 +961,42 @@ static void gen_stack_machine_code(Expr* expr)
         }
         case MATCH_EXPR:
         {
+            int match_type_size = stack_size_of_type(expr->matchexpr->type);
             gen_stack_machine_code(expr->matchexpr);
             // TODO: deal with > 3 words
             assert(stack_size_of_type(expr->matchexpr->type) <= 3 * WORD_SIZE);
             // Save expression value somewhere safe
-            push("%r15");
-            push("%r14");
+            if (match_type_size > 2 * WORD_SIZE) {
+                push("%r15");
+                push("%r14");
+            }
             push("%r13");
             push("%r12");
-            mov("%r12", r0);
-            mov("%r13", r1);
-            mov("%r14", r2);
+            switch (match_type_size) {
+              case 3 * WORD_SIZE: mov("%r14", r2);
+              case 2 * WORD_SIZE: mov("%r13", r1);
+              case 1 * WORD_SIZE: mov("%r12", r0);
+                                  break;
+              default:
+                assert(0 && "TODO: handle larger sizes");
+            }
             int end_of_match = request_label();
             for (CaseList* k = expr->cases; k; k = k->next) {
-                // Restore the value of the matchexpr
-                mov(r0, "%r12");
-                mov(r1, "%r13");
-                mov(r2, "%r14");
+                if (k != expr->cases) {
+                    // Restore the value of the matchexpr
+                    switch (match_type_size) {
+                      case 3 * WORD_SIZE: mov(r0, "%r14");
+                      case 2 * WORD_SIZE: mov(r1, "%r13");
+                      case 1 * WORD_SIZE: mov(r0, "%r12");
+                                          break;
+                      default:
+                        assert(0 && "TODO: handle larger sizes");
+                        break;
+                    }
+                }
 
                 gen_sm_unapply_pat(k->kase->pattern); // leaves 1 if matched
-                mov_imm(t0, 0LL);
-                cmp(r0, t0);
+                cmp_imm(r0, 0LL);
                 int end_of_this_case = request_label();
                 beq(end_of_this_case);
                 { // true
@@ -997,8 +1012,10 @@ static void gen_stack_machine_code(Expr* expr)
             // Restore scratched registers
             pop("%r12");
             pop("%r13");
-            pop("%r14");
-            pop("%r15");
+            if (match_type_size > 2 * WORD_SIZE) {
+                pop("%r14");
+                pop("%r15");
+            }
             break;
         }
     }
