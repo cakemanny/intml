@@ -86,6 +86,14 @@ match ([] : int list) with
 | _ -> 52
 " 52
 
+expect2 "let main () =
+match [1] with
+| _ :: x :: _ -> 50
+| x :: _ -> 51
+| _ -> 52
+" 51
+
+
 
 # Exit with the number of failing tests
 exit $exitcode

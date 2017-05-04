@@ -371,6 +371,10 @@ static void cmp(reg left, reg right)
 {
     ins2("cmpq", right, left); // do these
 }
+static void cmp_imm(reg left, long long imm)
+{
+    ins2_imm("cmpq", imm, left);
+}
 
 /*
  * Temporary labels look like L0, L1, L2
@@ -542,32 +546,51 @@ static void emit_fn_epilogue(Function* func)
 `----------------------------------------*/
 static void gen_stack_machine_code(Expr* expr);
 
-static void gen_list_from_end(ExprList* list, int list_stack_size)
+/*
+ List representation
+ -------------------
+ P0
+  -> [ P1, W01, W02, ... ]
+        -> [ P2, W11, W12, ... ]
+              -> [ 0, W12, W22, ... ]
+ In C struct notation:
+ typedef struct ListNode* LIST;
+ struct ListNode {
+   struct ListNode* tail;
+   struct Data { W1 w1; W2 w2; ... }
+ };
+
+ This give us that typeof(((LIST)l)->tail) == LIST
+ And LIST l = 0; is the empty list
+ */
+static void gen_list_from_end(ExprList* list, int node_size)
 {
-    assert(list_stack_size == 2 * WORD_SIZE); // just for time being
-    if (list->next) {
-        // put the head of the end of the list on the stack
-        gen_list_from_end(list->next, list_stack_size);
+    assert(node_size == 2 * WORD_SIZE); // just for time being
+    if (list) {
+        // put the tail of list in r0
+        gen_list_from_end(list->next, node_size);
+        push(r0); // save address of tail
+        sub_imm(sp, WORD_SIZE);
+        gen_stack_machine_code(list->expr); // result now in r0, r1, ...
+        // ASSUMING elem size == WORD_SIZE
+        mov(r1, r0); // data goes into word 2
+        add_imm(sp, WORD_SIZE);  // return stack pointer to point at our prev r0
+        //pop(r0); // the address of the tail.
+
         // Save the generated value on the stack...
+        //push(r0);
         push(r1);
-        push(r0);
         // allocate memory to save the data
-        alloc(list_stack_size); // == 2 * WORD_SIZE atm
-        pop(t0);
+        alloc(node_size); // == 2 * WORD_SIZE atm
         pop(t1);
+        pop(t0);
         // copy the data to memory
         store(0, r0, t0);
         store(WORD_SIZE, r0, t1);
+        // r0 is left as the pointer to list node
     } else {
         mov_imm(r0, 0LL); // nil
     }
-    push(r0); // save address of tail
-    sub_imm(sp, WORD_SIZE);
-    gen_stack_machine_code(list->expr); // result now in r0, r1, ...
-    // ASSUMING elem size == WORD_SIZE
-    mov(r1, r0); // data goes into word 2
-    add_imm(sp, WORD_SIZE);  // return stack pointer to point at our prev r0
-    pop(r0); // the address of the tail. DONE
 }
 
 /*
@@ -591,44 +614,49 @@ static void gen_sm_unapply_pat(Pattern* pat)
             assert(0 && "TODO: deal with larger variables");
             break;
         }
+        mov_imm(r0, 1LL);
+        break;
       }
       case PAT_DISCARD:
+      {
+        // Discard matches anything
+        mov_imm(r0, 1LL);
         break;
+      }
       case PAT_CONS:
       {
         // We must have either an empty list or non-empty list in result
         // position.
         int end_of_matching = request_label();
-        mov_imm(t0, 0LL);
-        cmp(r0, t0); // Check-null pnext => empty
+        cmp_imm(r0, 0LL); // Check-null phead==0 => empty
         beq(end_of_matching);
 
-        /* Think func list
-         * Current we have: [ rax, rdi, rsi ] = [ pnext, w1, w2 ]
-         * But PAT_VAR will expect: [ rax, rdi ] = [ w1, w2 ]
-         */
-        // Save pnext on stack
-        push(r0); // don't worry about stack alignment, promise we won't alloc
-        mov(r0, r1);
-        mov(r1, r2);
-        // Store the result into the variable on the left side of the CONS
-        gen_sm_unapply_pat(pat->left);
-        // Restore pnext somewhere sensible
-        pop(t0);
-        // Load the right side of the CONS (the tail) into registers
-        // Right side of cons expects [ rax, rdi, rsi ] = [ pnext, w1, w2 ]
-        switch (stack_size_of_type(pat->right->type)) {
-          case 3 * WORD_SIZE:   loadc(r2, t0, 2*WORD_SIZE,  "w2 into r2");
-          case 2 * WORD_SIZE:   loadc(r1, t0, WORD_SIZE,    "w1 into r1");
-          case 1 * WORD_SIZE:   loadc(r0, t0, 0,            "pnext into r0");
+        // Load head data
+        mov(t0, r0);
+        switch (WORD_SIZE + stack_size_of_type(pat->left->type)) {
+          case 3 * WORD_SIZE:   loadc(r1, t0, 2*WORD_SIZE,  "w2 into r1");
+          case 2 * WORD_SIZE:   loadc(r0, t0, WORD_SIZE,    "w1 into r0");
+          case 1 * WORD_SIZE:   loadc(t1, t0, 0,            "pnext into t1");
               break;
           default:
             assert(0 && "TODO: deal with larger variables");
             break;
         }
+
+        // Save pnext on stack -- if pat->left is discard or var we can elide
+        // this push (later in optimization excercise)
+        push(t1); // don't worry about stack alignment, promise we won't alloc
+        // Store the result into the variable on the left side of the CONS
+        gen_sm_unapply_pat(pat->left);
+        pop(t1);
+        cmp_imm(r0, 0LL); // but since left is a pattern, it may fail
+        beq(end_of_matching);
+
+        // Restore pnext where the rest of the pattern matching can use it
+        mov(r0, t1);
         gen_sm_unapply_pat(pat->right);
-        // return true from unapply:
-        mov_imm(r0, 1LL);
+        // Let the result of unapply of RHS be the return value of of the whole
+        // unapply (since we know unapply of left succeeded at this point)
 
         label(end_of_matching);
         // No need to do anything here - if was null then 0 still in r0
@@ -875,8 +903,7 @@ static void gen_stack_machine_code(Expr* expr)
 
             gen_sm_unapply_pat(binding->pattern); // leaves 1 if matched
             // TODO: if match fails branch to exit
-            mov_imm(t0, 0LL);
-            cmp(r0, t0);
+            cmp_imm(r0, 0LL);
             int match_success = request_label();
             bne(match_success);
             // Otherwise, we failed. Want to print "match failed" and exit(1)
@@ -889,8 +916,7 @@ static void gen_stack_machine_code(Expr* expr)
         case IF_EXPR:
         {
             gen_stack_machine_code(expr->condition);
-            mov_imm(t0, 0LL);
-            cmp(r0, t0);
+            cmp_imm(r0, 0LL);
             int end_of_true = request_label();
             int end_of_false = request_label();
             beq(end_of_true);
@@ -908,12 +934,9 @@ static void gen_stack_machine_code(Expr* expr)
         case LIST:
         {
             // Idea: generate code that allocates the list items from the end
-            // to the start and then leaves the start item on the stack
-            if (stack_size_of_type(expr->type) > 7 * WORD_SIZE) {
-                fprintf(stderr, EPFX"stack size of list too large");
-                exit(EXIT_FAILURE);
-            }
-            gen_list_from_end(expr->expr_list, stack_size_of_type(expr->type));
+            // to the start and then leaves pointer to start on the stack
+            gen_list_from_end(expr->expr_list,
+                    WORD_SIZE + stack_size_of_type(expr->type->param));
             break;
         }
         case VECTOR:
@@ -1070,8 +1093,7 @@ static size_t stack_size_of_type(TypeExpr* type)
       case TYPE_CONSTRUCTOR:
       {
           if (type->constructor == symbol("list")) {
-
-              return WORD_SIZE + stack_size_of_type(type->param);
+              return WORD_SIZE; // Just pointer to first node
           } else if (type->constructor == symbol("vector")) {
               // Just a pointer to the root
               // Maybe putting the first 32 elems on stack could be an opt
