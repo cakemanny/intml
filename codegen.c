@@ -432,6 +432,24 @@ static void alloc(int size)
 #endif
     // Now the address of the allocated memory is in rax
 }
+static void exit_imm(int exit_code)
+{
+#if defined(__APPLE__) && defined(__x86_64__)
+    mov_imm("%rdi", exit_code);
+    call("__exit");
+#elif defined(__linux__) && defined(__x86_64__)
+    mov_imm("%rdi", exit_code);
+    call("_exit");
+#elif defined(_WIN32) && defined(__x86_64__)
+    // allocate shadow space
+    ins2("subq", "$32", sp);
+    mov_imm("%rcx", exit_code);
+    call("_exit");
+    ins2("addq", "$32", sp);
+#else
+#   error "Unknown platform"
+#endif
+}
 
 static int closure_size(const Function* func)
 {
@@ -556,6 +574,7 @@ static void gen_list_from_end(ExprList* list, int list_stack_size)
  * Given the result of an expression on the stack, decompose and extract the
  * values into the stack locations for the variables as declared in the
  * function information
+ * Leaves 1 in r0 if match successful 0 otherwise
  */
 static void gen_sm_unapply_pat(Pattern* pat)
 {
@@ -578,7 +597,11 @@ static void gen_sm_unapply_pat(Pattern* pat)
       case PAT_CONS:
       {
         // We must have either an empty list or non-empty list in result
-        // position. Assume non-empty
+        // position.
+        int end_of_matching = request_label();
+        mov_imm(t0, 0LL);
+        cmp(r0, t0); // Check-null pnext => empty
+        beq(end_of_matching);
 
         /* Think func list
          * Current we have: [ rax, rdi, rsi ] = [ pnext, w1, w2 ]
@@ -604,6 +627,11 @@ static void gen_sm_unapply_pat(Pattern* pat)
             break;
         }
         gen_sm_unapply_pat(pat->right);
+        // return true from unapply:
+        mov_imm(r0, 1LL);
+
+        label(end_of_matching);
+        // No need to do anything here - if was null then 0 still in r0
         break;
       }
     }
@@ -844,9 +872,17 @@ static void gen_stack_machine_code(Expr* expr)
             // Idea: emit the code for the init, assign the result
             // to a location on the stack, then emit code for the subexpr
             gen_stack_machine_code(binding->init);
-            // Now the result is in r0 for ints but in r0 and r1 for funcs
-            gen_sm_unapply_pat(binding->pattern);
 
+            gen_sm_unapply_pat(binding->pattern); // leaves 1 if matched
+            // TODO: if match fails branch to exit
+            mov_imm(t0, 0LL);
+            cmp(r0, t0);
+            int match_success = request_label();
+            bne(match_success);
+            // Otherwise, we failed. Want to print "match failed" and exit(1)
+            exit_imm(99);
+
+            label(match_success);
             gen_stack_machine_code(binding->subexpr);
             break;
         }
@@ -898,6 +934,48 @@ static void gen_stack_machine_code(Expr* expr)
             store(-varx.stack_offset, bp, r0);
 
             gen_stack_machine_code(expr->ext.subexpr);
+            break;
+        }
+        case MATCH_EXPR:
+        {
+            gen_stack_machine_code(expr->matchexpr);
+            // TODO: deal with > 3 words
+            assert(stack_size_of_type(expr->matchexpr->type) <= 3 * WORD_SIZE);
+            // Save expression value somewhere safe
+            push("%r15");
+            push("%r14");
+            push("%r13");
+            push("%r12");
+            mov("%r12", r0);
+            mov("%r13", r1);
+            mov("%r14", r2);
+            int end_of_match = request_label();
+            for (CaseList* k = expr->cases; k; k = k->next) {
+                // Restore the value of the matchexpr
+                mov(r0, "%r12");
+                mov(r1, "%r13");
+                mov(r2, "%r14");
+
+                gen_sm_unapply_pat(k->kase->pattern); // leaves 1 if matched
+                mov_imm(t0, 0LL);
+                cmp(r0, t0);
+                int end_of_this_case = request_label();
+                beq(end_of_this_case);
+                { // true
+                    gen_stack_machine_code(k->kase->expr);
+                }
+                b(end_of_match);
+                label(end_of_this_case);
+            }
+            // Fell through all cases - match failure
+            exit_imm(99); // TODO: call write "match failure"
+
+            label(end_of_match);
+            // Restore scratched registers
+            pop("%r12");
+            pop("%r13");
+            pop("%r14");
+            pop("%r15");
             break;
         }
     }
@@ -1191,6 +1269,18 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
         var_stack_ptr = saved_stack_ptr;
         break;
       }
+      case MATCH_EXPR:
+      {
+        calculate_activation_records_expr(expr->matchexpr, curr_func);
+        for (CaseList* k = expr->cases; k; k = k->next) {
+            Var* saved_stack_ptr = var_stack_ptr;
+            // modifies var_stack_ptr
+            calculate_activation_records_pat(k->kase->pattern, curr_func);
+            calculate_activation_records_expr(k->kase->expr, curr_func);
+            var_stack_ptr = saved_stack_ptr;
+        }
+        break;
+      }
     }
 }
 
@@ -1283,6 +1373,14 @@ static void rewrite_functions(Expr* expr)
          *  let write _1 = let write$ _2 = _write (_1, _2) in write$
          */
         rewrite_functions(expr->ext.subexpr);
+        break;
+      }
+      case MATCH_EXPR:
+      {
+        rewrite_functions(expr->matchexpr);
+        for (CaseList* k = expr->cases; k; k = k->next) {
+            rewrite_functions(k->kase->expr);
+        }
         break;
       }
     }

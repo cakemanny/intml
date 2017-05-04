@@ -69,6 +69,24 @@ let sum =
 let main () = sum [ 4; 3; 2; 1; 0; 0 ]
 " 10
 
+expect2 "let main () =
+  match 10 with
+  | y -> y * y
+" 100
+
+expect2 "let main () =
+match [1] with
+| x :: _ -> 51
+| _ -> 52
+" 51
+
+expect2 "let main () =
+match ([] : int list) with
+| x :: _ -> 51
+| _ -> 52
+" 52
+
+
 # Exit with the number of failing tests
 exit $exitcode
 
