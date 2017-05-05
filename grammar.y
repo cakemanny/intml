@@ -65,7 +65,7 @@ static DeclarationList* tree = NULL;
 %nonassoc '[' ']' VSTART VEND
 %right ';'
 %nonassoc IF THEN ELSE
-%nonassoc ','
+%right ',' /* not really, but makes list-building easier */
 %left '=' '|'   /* right in assignments but left in expressions */
 %nonassoc '<' LE
 %right '^' '@'
@@ -132,6 +132,15 @@ expr:
   | expr exprterm               { $$ = apply($1, $2); }
   | exprterm                    { $$ = $1; }
   | MATCH expr WITH matchings   { $$ = match($2, reverse_cases($4)); }
+  | expr ',' expr
+    {
+      if ($3->tag == TUPLE) {
+        $3->expr_list = add_expr($3->expr_list, $1);
+        $$ = $3;
+      } else {
+        $$ = tuple(add_expr(add_expr(exprlist(), $3), $1));
+      }
+    }
   ;
 exprterm:
     '(' expr ')'                { $$ = $2; }

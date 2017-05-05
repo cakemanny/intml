@@ -894,6 +894,8 @@ static void gen_stack_machine_code(Expr* expr)
             gen_stack_machine_code(expr->func.subexpr);
             break;
         }
+        // TODO: we can probably replace all bind and if expressions by match
+        // expressions in a rewrite phase
         case BIND_EXPR:
         {
             BindExpr* binding = &expr->binding;

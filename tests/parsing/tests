@@ -22,7 +22,7 @@ expect "type x = a * (b * c)" "((type x (a * (b * c))))"
 expect "type t = a -> b -> c" "((type t (a -> (b -> c))))"
 
 # unit parens can be separated
-expect "let x = ()" "((let (pattern x) (unit ())))"
+expect "let x = (  )" "((let (pattern x) (unit ())))"
 
 expect "let x = [1]" "((let (pattern x) (list ((int 1)))))"
 expect "let x = [|1|]" "((let (pattern x) (vector ((int 1)))))"
@@ -34,4 +34,7 @@ expect "let x = match xs with x::_ -> 1 | _ -> 2" \
 # same thing but with leading |
 expect "let x = match xs with | x::_ -> 1 | _ -> 2" \
     "((let (pattern x) (match (var xs) ((pattern cons (pattern x) (pattern _)) (int 1) (pattern _) (int 2)))))"
+
+# tuples
+expect "let x = 1, 2, 3" "((let (pattern x) (tuple ((int 1) (int 2) (int 3)))))"
 
