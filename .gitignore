@@ -6,6 +6,8 @@ intml
 lex.yy.*
 *.output
 grammar.tab.*
+# depfiles
+*.d
 
 #tmp dir for temporary things in life
 /tmp

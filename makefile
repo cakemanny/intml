@@ -1,3 +1,6 @@
+.SUFFIXES:
+
+SUFFIXES = .c .h .o .l. y .d
 
 CC=gcc
 CFLAGS=-std=gnu11 -g -Wall -fno-omit-frame-pointer
@@ -18,18 +21,36 @@ YFLAGS=-d -v
 LEX=flex
 LFLAGS=
 
+# Common files for both SRC and OSRC
+BSRC=ast.c codegen.c symbols.c types_and_vars.c
+# files that are edited by a hum
+SRC=ast.h codegen.h grammar.y lexer.l symbols.h \
+      types_and_vars.h runtime.c $(BSRC)
+# deps for the final binary
+OSRC=grammar.tab.c lex.yy.c $(BSRC)
+
 # Use default rule...
-intml: grammar.tab.o lex.yy.o ast.o symbols.o types_and_vars.o codegen.o
+intml: $(OSRC:.c=.o)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 grammar.tab.h grammar.tab.c: grammar.y
 	$(YACC) $(YFLAGS) $<
 
-lex.yy.c: lexer.l
+lex.yy.c: lexer.l grammar.tab.h
 	$(LEX) $(LFLAGS) $<
+
+%.o: %.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c -o $@ $<
 
 .PHONY: clean
 
 clean:
-	rm -f intml.exe *.o lex.yy.c grammar.tab.{c,h} grammar.output
+	rm -f intml intml.exe *.o lex.yy.c grammar.tab.{c,h} grammar.output *.d
+
+%.d: %.c $(SRC)
+	$(CC) $(CFLAGS) -MM $< > $@
+
+ifneq "$(MAKECMDGOALS)" "clean"
+  -include ${OSRC:.c=.d}
+endif
 
