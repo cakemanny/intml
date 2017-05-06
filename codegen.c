@@ -298,10 +298,6 @@ static inline void ins1(const char* instr, const char* op)
 {
     fprintf(cgenout, "\t%s\t%s\n", instr, op);
 }
-static void push(reg op0)
-{
-    ins1("pushq", op0);
-}
 static void add(reg dst, reg op1, reg op2)
 {
     if (dst == op1) {
@@ -367,6 +363,12 @@ static void pop(reg dst)
 {
     ins1("popq", dst);
 }
+static void popd() /* Discard item on stack*/ { add_imm(sp, WORD_SIZE); }
+static void push(reg op0)
+{
+    ins1("pushq", op0);
+}
+static void pushd() /* used to align the stack */ { sub_imm(sp, WORD_SIZE); }
 static void cmp(reg left, reg right)
 {
     ins2("cmpq", right, left); // do these
@@ -570,11 +572,11 @@ static void gen_list_from_end(ExprList* list, int node_size)
         // put the tail of list in r0
         gen_list_from_end(list->next, node_size);
         push(r0); // save address of tail
-        sub_imm(sp, WORD_SIZE);
+        pushd(); // align stack
         gen_stack_machine_code(list->expr); // result now in r0, r1, ...
         // ASSUMING elem size == WORD_SIZE
         mov(r1, r0); // data goes into word 2
-        add_imm(sp, WORD_SIZE);  // return stack pointer to point at our prev r0
+        popd();  // return stack pointer to point at our prev r0
         //pop(r0); // the address of the tail.
 
         // Save the generated value on the stack...
@@ -948,7 +950,70 @@ static void gen_stack_machine_code(Expr* expr)
         }
         case TUPLE:
         {
-            assert(0 && "TODO: tuple codgen");
+            // Evaluate the expressions, left to right, then push the results
+            // onto the stack, once all expressions are evaluated, pop the
+            // values back into registers
+
+            // Things to think about...
+            // * how wide each each type
+
+            // 5 may be our limit for moment because we would want to be able
+            // to pass around lists which require pointer word in node
+            // and there are only 6 argument registers on x86
+            // Could have (char * char * ... * char) if char only takes up a
+            // byte
+            assert(stack_size_of_type(expr->type) <= 4 * WORD_SIZE);
+            assert(stack_size_of_type(expr->type) >= 2 * WORD_SIZE);
+
+            for (ExprList* l = expr->expr_list; l; l = l->next) {
+                gen_stack_machine_code(l->expr);
+                switch (stack_size_of_type(l->expr->type)) {
+                    case 4 * WORD_SIZE:
+                    case 3 * WORD_SIZE: push(r3); push(r2);
+                    case 2 * WORD_SIZE:
+                    case 1 * WORD_SIZE: push(r1); push(r0);
+                    case 0:
+                        break;
+                    default: assert(0 && "TODO: any size tuple"); break;
+                }
+            }
+            assert(expr->expr_list->next); // tuples always of size 2 or >
+            ExprList* ls[4] = { expr->expr_list, 0, 0, 0 };
+            // Start with the end
+            ls[1] = ls[0]->next;
+            if ((ls[2] = ls[1]->next)) {
+                if ((ls[3] = ls[2]->next)) { }
+            }
+
+            // Remember that it might be that we have
+            // (int * int * int * int)
+            // in which case because of our double push, this is stored as
+            // [ w, 0, x, 0, y, 0, z, 0 ] but want [ x, y, w, z ]
+
+            // iterate backwars through the expression results and the
+            // destination registers
+            reg rs[4] = { r0, r1, r2, r3 };
+            for (int i = 3, j = 3; i >= 0; --i) {
+                if (ls[i]) {
+                    switch (stack_size_of_type(ls[i]->expr->type)) {
+                        case 4 * WORD_SIZE: // all words important
+                            pop(rs[j--]);pop(rs[j--]);pop(rs[j--]);pop(rs[j--]);
+                            break;
+                        case 3 * WORD_SIZE: // 1st word garbage
+                            popd();pop(rs[j--]);pop(rs[j--]);pop(rs[j--]);
+                            break;
+                        case 2 * WORD_SIZE: // both words important again
+                            pop(rs[j--]);pop(rs[j--]);
+                            break;
+                        case 1 * WORD_SIZE:
+                            popd();pop(rs[j--]);
+                            break;
+                        case 0:
+                            break;
+                        default: assert(0 && "TODO: any size tuple"); break;
+                    }
+                }
+            }
             break;
         }
         case EXTERN_EXPR: // it's quite similar...
