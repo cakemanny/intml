@@ -26,6 +26,8 @@ static DeclarationList* tree = NULL;
     Expr*               expr;
     ExprList*           exprs;
     Pattern*            pattern;
+    PatternList*        patterns;
+    TPat*               tpat;
     ParamList*          params;
     Param*              param;
     TypeExpr*           typexpr;
@@ -51,6 +53,7 @@ static DeclarationList* tree = NULL;
 %type <declarations> program declarations
 %type <declaration> declaration letdecl
 %type <pattern> pattern
+%type <tpat> tpattern
 %type <params> params
 %type <param> param
 %type <exprs> exprlist nonemptylist
@@ -102,10 +105,14 @@ letdecl:
     { $$ = recfunc_w_type($3, reverse_params($4), $5, $7); }
   ;
 pattern:
-    ID                          { $$ = pat_var($1); }
-  | '(' pattern ')'             { $$ = $2; }
-  | '_'                         { $$ = pat_discard(); }
-  | pattern CONS pattern        { $$ = pat_cons($1, $3); }
+    tpattern                    { $$ = tpat_to_pat($1); }
+  ;
+tpattern:
+    ID                          { $$ = tpat_var($1); }
+  | '(' pattern ')'             { $$ = tpat_pattern($2); }
+  | '_'                         { $$ = tpat_discard(); }
+  | tpattern CONS tpattern      { $$ = tpat_cons($1, $3); }
+  | tpattern ',' tpattern       { $$ = tpat_tuple($1, $3); }
   ;
 params:
     params param                { $$ = add_param($1, $2); }

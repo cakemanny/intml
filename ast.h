@@ -16,6 +16,8 @@ DECLARE_STRUCT( External        );
 DECLARE_STRUCT( ParamList       );
 DECLARE_STRUCT( Param           );
 DECLARE_STRUCT( Pattern         );
+DECLARE_STRUCT( PatternList     );
+DECLARE_STRUCT( TPat            );
 DECLARE_STRUCT( Expr            );
 DECLARE_STRUCT( FuncExpr        );
 DECLARE_STRUCT( BindExpr        );
@@ -219,11 +221,31 @@ struct TypeExprList {
     TypeExprList* next;
 };
 
+/* */
+struct TPat {
+    enum TPatTag {
+        TPAT_VAR = 1,
+        TPAT_DISCARD,
+        TPAT_CONS,
+        TPAT_TUPLE,
+        TPAT_PATTERN,
+    } tag;
+    union {
+        Symbol name; /* TPAT_VAR */
+        struct {
+            TPat* left;  /* TPAT_CONS, TPAT_TUPLE */
+            TPat* right;
+        };
+        Pattern* pattern; /* TPAT_PATTERN*/
+    };
+};
+
 struct Pattern {
     enum PatternTag {
         PAT_VAR = 1,
         PAT_DISCARD,
         PAT_CONS,
+        PAT_TUPLE,
     } tag;
     union {
         struct {
@@ -231,11 +253,17 @@ struct Pattern {
             int var_id; // used for tagging in codgen
         };
         struct {
-            Pattern* left;  /* CONS */
+            Pattern* left;  /* PAT_CONS */
             Pattern* right;
         };
+        PatternList* pat_list;  /* PAT_TUPLE*/
     };
     TypeExpr* type;
+};
+
+struct PatternList {
+    Pattern* pattern;
+    PatternList* next;
 };
 
 struct Case {
@@ -264,6 +292,11 @@ void print_declaration(FILE* out, const Declaration* decl);
  * Print a type expression tree
  */
 void print_typexpr(FILE*, TypeExpr*);
+
+/*
+ * Print a pattern expression
+ */
+void print_pattern(FILE* out, const Pattern* pat);
 
 /*
  * Write our own printf just to make printing types a bit easier
@@ -521,6 +554,36 @@ Pattern* pat_discard();
  * A pattern that matches the head and the tail of a list
  */
 Pattern* pat_cons(Pattern* head, Pattern* tail);
+
+/*
+ *
+ */
+Pattern* pat_tuple(PatternList* list);
+
+/*
+ * A non-empty list.
+ */
+PatternList* pat_nel(Pattern* head);
+
+/*
+ * Returns a new list with newhead as the head and list as the tail
+ */
+PatternList* add_pat(PatternList* list, Pattern* newhead);
+
+/*
+ * Temporary pattern type that doesn't contain lists so that
+ * we can get tuple grammar to work with the fact that parens create sub-tuples
+ */
+TPat* tpat_var(Symbol name);
+TPat* tpat_discard();
+TPat* tpat_cons(TPat* head, TPat* tail);
+TPat* tpat_tuple(TPat* first, TPat* rest);
+TPat* tpat_pattern(Pattern* pattern);
+
+/*
+ * Convert from a TPat to a Pattern
+ */
+Pattern* tpat_to_pat(TPat* tpat);
 
 /*
  * A case node for a match or function expression

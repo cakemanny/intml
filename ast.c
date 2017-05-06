@@ -445,6 +445,128 @@ Pattern* pat_cons(Pattern* head, Pattern* tail)
     return result;
 }
 
+Pattern* pat_tuple(PatternList* list)
+{
+    struct Pattern* result = pat(PAT_TUPLE);
+    result->pat_list = list;
+    return result;
+}
+
+PatternList* add_pat(PatternList* list, Pattern* newhead)
+{
+    PatternList* result = xmalloc(sizeof *result);
+    result->pattern = newhead;
+    result->next = list;
+    return result;
+}
+
+PatternList* pat_nel(Pattern* head)
+{
+    return add_pat(NULL, head);
+}
+
+PatternList* reverse_patterns(PatternList* list)
+{
+    REVERSE_LIST_IMPL(PatternList, list);
+}
+
+static TPat* tpat(enum TPatTag tag)
+{
+    TPat* tp = xmalloc(sizeof *tp);
+    tp->tag = tag;
+    return tp;
+}
+TPat* tpat_var(Symbol name)
+{
+    TPat* tp = tpat(TPAT_VAR);
+    tp->name = name;
+    return tp;
+}
+TPat* tpat_discard() { return tpat(TPAT_DISCARD); }
+TPat* tpat_cons(TPat* head, TPat* tail)
+{
+    TPat* tp = tpat(TPAT_CONS);
+    tp->left = head;
+    tp->right = tail;
+    return tp;
+}
+TPat* tpat_tuple(TPat* first, TPat* rest)
+{
+    TPat* tp = tpat(TPAT_TUPLE);
+    tp->left = first;
+    tp->right = rest;
+    return tp;
+}
+TPat* tpat_pattern(Pattern* pattern)
+{
+    TPat* tp = tpat(TPAT_PATTERN);
+    tp->pattern = pattern;
+    return tp;
+}
+
+void print_tpat(FILE* out, TPat* tpat)
+{
+    fputc('(', out);
+    switch (tpat->tag) {
+        case TPAT_VAR:
+            fprintf(out, "tvar %s", tpat->name);
+            break;
+        case TPAT_DISCARD:
+            fputs("tdiscard", out);
+            break;
+        case TPAT_CONS:
+            fputs("tcons ", out);
+            print_tpat(out, tpat->left);
+            fputs(" ", out);
+            print_tpat(out, tpat->right);
+            break;
+        case TPAT_TUPLE:
+            fputs("ttuple ", out);
+            print_tpat(out, tpat->left);
+            fputs(" ", out);
+            print_tpat(out, tpat->right);
+            break;
+        case TPAT_PATTERN:
+            fputs("tpattern ", out);
+            print_pattern(out, tpat->pattern);
+            break;
+    }
+    fputc(')', out);
+}
+
+Pattern* tpat_to_pat(TPat* tpat)
+{
+#define FF(x) ({ Pattern* __result = (x); free(tpat); __result; })
+    switch (tpat->tag) {
+        case TPAT_VAR:
+            return FF(pat_var(tpat->name));
+        case TPAT_DISCARD:
+            return FF(pat_discard());
+        case TPAT_CONS:
+            return FF(pat_cons(tpat_to_pat(tpat->left), tpat_to_pat(tpat->right)));
+        case TPAT_PATTERN:
+            return FF(tpat->pattern);
+        case TPAT_TUPLE:
+        {
+            PatternList* result = NULL;
+            TPat* tmp = tpat;
+            while (tmp->tag == TPAT_TUPLE) {
+                result = add_pat(result, tpat_to_pat(tmp->left));
+
+                TPat* tmp2 = tmp->right;
+                free(tmp);
+                tmp = tmp2;
+            }
+            result = add_pat(result, tpat_to_pat(tmp));
+            return pat_tuple(reverse_patterns(result));
+        }
+    }
+#undef FF
+    //fprintf(stderr, "%s, %s:%d\n", __FUNCTION__, __FILE__, __LINE__);
+    //abort();
+}
+
+
 Case* matchcase(Pattern* pattern, Expr* expr)
 {
     Case* result = xmalloc(sizeof *result);
@@ -534,25 +656,33 @@ void print_params(FILE* out, const ParamList* params)
 
 void print_exprlist(FILE* out, const ExprList* list)
 {
-    fputc('(', out);
     const char* prefix = ""; // all but first get space prefix
     for (const ExprList* c = list; c; c = c->next) {
         fputs(prefix, out);
         print_expr(out, c->expr);
         prefix = " ";
     }
-    fputc(')', out);
+}
+
+void print_patternlist(FILE* out, const PatternList* list)
+{
+    const char* prefix = "";
+    for (const PatternList* l = list; l; l = l->next) {
+        fputs(prefix, out);
+        print_pattern(out, l->pattern);
+        prefix = " ";
+    }
 }
 
 void print_pattern(FILE* out, const Pattern* pat)
 {
-    fputs("(pattern ", out);
+    fputs("(p", out);
     switch (pat->tag) {
         case PAT_VAR:
-            fprintf(out, "%s", pat->name);
+            fprintf(out, "var %s", pat->name);
             break;
         case PAT_DISCARD:
-            fputc('_', out);
+            fputs("discard", out);
             break;
         case PAT_CONS:
         {
@@ -561,6 +691,11 @@ void print_pattern(FILE* out, const Pattern* pat)
             fputc(' ', out);
             print_pattern(out, pat->right);
             break;
+        }
+        case PAT_TUPLE:
+        {
+            fputs("tuple ", out);
+            print_patternlist(out, pat->pat_list);
         }
     }
     fputc(')', out);

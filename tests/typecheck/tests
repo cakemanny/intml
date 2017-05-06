@@ -1,8 +1,6 @@
 #!/bin/bash
 
 intml=../../intml
-# add a main function to make codegen happy
-end=" let main () = 0"
 red=$(tput setaf 1)
 green=$(tput setaf 2)
 reset=$(tput sgr0)
@@ -11,7 +9,7 @@ failures=0
 
 expect_fail() {
     code=$1
-    if (echo "$code$end" | $intml -t -o /dev/null - >/dev/null 2>&1); then
+    if (echo "$code" | $intml -t -o /dev/null - >/dev/null 2>&1); then
         echo "${red}fail:${reset} compiled without error: $code"
         failures=$(($failures + 1))
     else
@@ -20,7 +18,7 @@ expect_fail() {
 }
 expect_pass() {
     code=$1
-    if (echo "$code$end" | $intml -t -o /dev/null -); then
+    if (echo "$code" | $intml -t -o /dev/null -); then
         echo "${green}pass:${reset} compiled: $code"
     else
         echo "${red}fail:${reset} did not compile: $code"
