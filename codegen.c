@@ -67,7 +67,7 @@ main__f:
 #define ENTRY_SYMBOL "start"
 #define PFX "codegen: "
 #define EPFX "codegen: error: "
-static const size_t WORD_SIZE = sizeof(void*);
+#define WORD_SIZE (sizeof(void*))
 
 /*
  * flag to enable or disable verbose debugging statements

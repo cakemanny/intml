@@ -13,6 +13,13 @@
 #define EPFX    "typecheck: error: "
 #define PFX     "typecheck: "
 
+// for where our code should never reach if case statements are complete
+#define FAIL_MISSED_CASE() do {                         \
+    fprintf(stderr, "function %s, file %s, line %d\n",  \
+            __FUNCTION__, __FILE__, __LINE__);          \
+    abort();                                            \
+} while(0)
+
 /* See header file */
 int debug_type_checker = 0;
 
@@ -66,7 +73,7 @@ static TypeExpr* lookup_typexpr(Symbol name)
         return res;
     fprintf(stderr, "%s\n", name);
     assert(0 && "type not in type_names table");
-    abort(); // shut mingw-w64 up
+    FAIL_MISSED_CASE();
 }
 
 static TypeExpr* deref_typexpr(Symbol name)
@@ -159,9 +166,7 @@ __pure static _Bool typexpr_equals(TypeExpr* left, TypeExpr* right)
             && typexpr_equals(left->param, right->param);
       }
     }
-    fprintf(stderr, "typexpr_equals fail %d\n", left->tag);
-    assert(0 && "typexpr_equals");
-    abort(); // Shouldnt be possible
+    FAIL_MISSED_CASE();
 }
 
 static TypeExpr* deref_if_needed(TypeExpr* t)
@@ -311,7 +316,7 @@ __pure static _Bool solid_type(TypeExpr* type)
             )
             return 1;
     }
-    abort();
+    FAIL_MISSED_CASE();
 }
 
 
@@ -336,7 +341,7 @@ static _Bool type_uses_constraint(TypeExpr* type, int constraint_id)
         return 0;
       }
     }
-    abort();
+    FAIL_MISSED_CASE();
 }
 
 static TypeExpr* replaced_constraint(TypeExpr*, int, TypeExpr* );
@@ -380,7 +385,7 @@ static TypeExpr* replaced_constraint(
             replaced_constraint(toreplace->param, constraint_id, theory),
             toreplace->constructor);
     }
-    abort(); // shouln't be possible
+    FAIL_MISSED_CASE();
 }
 
 static void replace_constraint_if_needed(
@@ -621,7 +626,7 @@ static int theorise_equal(TypeExpr* etype, TypeExpr* newtype)
         return types_added;
       }
     }
-    abort(); // shouln't be possible
+    FAIL_MISSED_CASE();
 }
 
 __attribute__((const))
@@ -668,6 +673,7 @@ static int count_names_pat(Pattern* pat)
       case PAT_CONS: return count_names_pat(pat->left)
                      + count_names_pat(pat->right);
     }
+    FAIL_MISSED_CASE();
 }
 static void add_names_to_array_pat(Pattern* pat, Symbol** ptr_next)
 {
@@ -1307,7 +1313,7 @@ static int deducetype_expr(Expr* expr)
         return types_added;
       }
     }
-    abort(); // Shouldn't be possible to get here
+    FAIL_MISSED_CASE();
 }
 
 __attribute__((warn_unused_result))
@@ -1319,6 +1325,7 @@ __pure static _Bool declares_name_pat(Pattern* pat, Symbol name)
       case PAT_CONS: return declares_name_pat(pat->left, name)
                      || declares_name_pat(pat->right, name);
     }
+    FAIL_MISSED_CASE();
 }
 
 /*
@@ -1335,7 +1342,7 @@ __pure static _Bool declares_name(Declaration* declaration, Symbol name)
         case DECL_TYPE: return declaration->type.name == name;
         case DECL_EXTERN: return declaration->ext.name == name;
     }
-    abort();
+    FAIL_MISSED_CASE();
 }
 __attribute__((warn_unused_result))
 __pure static TypeExpr** decl_type_ptr_pat(Pattern* pat, Symbol name)
@@ -1353,6 +1360,7 @@ __pure static TypeExpr** decl_type_ptr_pat(Pattern* pat, Symbol name)
             else return decl_type_ptr_pat(pat->right, name);
         }
     }
+    FAIL_MISSED_CASE();
 }
 __attribute__((warn_unused_result))
 __pure static TypeExpr** decl_type_ptr(Declaration* declaration, Symbol name)
@@ -1366,7 +1374,7 @@ __pure static TypeExpr** decl_type_ptr(Declaration* declaration, Symbol name)
         case DECL_TYPE: return &declaration->type.definition;
         case DECL_EXTERN: return &declaration->ext.type;
     }
-    abort();
+    FAIL_MISSED_CASE();
 }
 /*
  * A helper function for accessing the type of any declaration types
