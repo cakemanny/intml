@@ -551,14 +551,14 @@ Pattern* tpat_to_pat(TPat* tpat)
             PatternList* result = NULL;
             TPat* tmp = tpat;
             while (tmp->tag == TPAT_TUPLE) {
-                result = add_pat(result, tpat_to_pat(tmp->left));
+                result = add_pat(result, tpat_to_pat(tmp->right));
 
-                TPat* tmp2 = tmp->right;
+                TPat* tmp2 = tmp->left;
                 free(tmp);
                 tmp = tmp2;
             }
             result = add_pat(result, tpat_to_pat(tmp));
-            return pat_tuple(reverse_patterns(result));
+            return pat_tuple(result);
         }
     }
 #undef FF

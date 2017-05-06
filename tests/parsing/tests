@@ -45,8 +45,17 @@ expect "let x = a, b, c" "((let (pvar x) (tuple (var a) (var b) (var c))))"
 expect "let x = (a, b), c" "((let (pvar x) (tuple (tuple (var a) (var b)) (var c))))"
 expect "let x = a, (b, c)" "((let (pvar x) (tuple (var a) (tuple (var b) (var c)))))"
 
+expect "let x = 1 + 2, 3 + 4, 5 + 6" \
+    "((let (pvar x) (tuple (+ (int 1) (int 2)) (+ (int 3) (int 4)) (+ (int 5) (int 6)))))"
+
 #tuple pattersn
 expect "let a, b, c = x" "((let (ptuple (pvar a) (pvar b) (pvar c)) (var x)))"
 expect "let (a, b), c = x" "((let (ptuple (ptuple (pvar a) (pvar b)) (pvar c)) (var x)))"
 expect "let a, (b, c) = x" "((let (ptuple (pvar a) (ptuple (pvar b) (pvar c))) (var x)))"
+
+# function application associates to the left
+expect "let x = f a b" "((let (pvar x) (apply (apply (var f) (var a)) (var b))))"
+# function application has higher recendence than + for example
+expect "let x = f a + b" "((let (pvar x) (+ (apply (var f) (var a)) (var b))))"
+expect "let x = f + a b" "((let (pvar x) (+ (var f) (apply (var a) (var b)))))"
 
