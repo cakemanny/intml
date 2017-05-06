@@ -129,7 +129,7 @@ __pure static _Bool typexpr_equals(TypeExpr* left, TypeExpr* right)
       }
       case TYPE_CONSTRAINT:
       {
-        if (right->tag != TYPE_CONSTRUCTOR) {
+        if (right->tag != TYPE_CONSTRAINT) {
             return 0; // could conform but not equal
         }
         return left->constraint_id == right->constraint_id;
@@ -159,6 +159,8 @@ __pure static _Bool typexpr_equals(TypeExpr* left, TypeExpr* right)
             && typexpr_equals(left->param, right->param);
       }
     }
+    fprintf(stderr, "typexpr_equals fail %d\n", left->tag);
+    assert(0 && "typexpr_equals");
     abort(); // Shouldnt be possible
 }
 
@@ -193,7 +195,20 @@ __pure static _Bool typexpr_conforms_to(TypeExpr* left, TypeExpr* right)
         return left->constructor == right->constructor
             && typexpr_conforms_to(left->param, right->param);
     }
-    // Must be both tuple or both arrow
+    if (dleft->tag == TYPE_TUPLE) {
+        for (TypeExprList* l = left->type_list, * r = right->type_list;
+                l || r; l = l->next, r = r->next)
+        {
+            if (!(l && r)) {
+                return 0; // not same length
+            }
+            if (!typexpr_conforms_to(l->type, r->type)) {
+                return 0;
+            }
+        }
+        return 1;
+    }
+    // Must be both both arrow
     return typexpr_conforms_to(left->left, right->left)
         && typexpr_conforms_to(left->right, right->right);
 }
@@ -962,7 +977,7 @@ static int deducetype_expr(Expr* expr)
         assert(typexpr_equals(string_type, expr->type));
         return 0;
       }
-      case RECFUNC_EXPR: /* TODO: make these different */
+      case RECFUNC_EXPR:
       case FUNC_EXPR:
       {
         int types_added = 0;
@@ -1220,8 +1235,37 @@ static int deducetype_expr(Expr* expr)
       case TUPLE:
       {
         int types_added = 0;
-        // TODO
-        assert(0 && "TODO: tuples");
+        for (ExprList* l = expr->expr_list; l; l = l->next) {
+            types_added += deducetype_expr(l->expr);
+        }
+
+        TypeExprList* new_type_list =
+            type_list(expr->expr_list->expr->type);
+        for (ExprList* l = expr->expr_list->next; l; l = l->next) {
+            new_type_list = type_add(new_type_list, l->expr->type);
+        }
+        TypeExpr* expected_type = typetuple(reversed_types(new_type_list));
+
+        if (expr->type) {
+            if (expr->type->tag != TYPE_TUPLE) {
+                if (expr->type->tag == TYPE_NAME) {
+                    expr->type = deref_typexpr(expr->type->name);
+                } else if (expr->type->tag == TYPE_CONSTRAINT) {
+                    dbgprint("tuple expression had constraint type");
+                    TypeExpr* old_type = expr->type;
+                    expr->type = expected_type;
+                    types_added += 1 + theorise_equal(old_type, expr->type);
+                }
+            }
+
+            typexpr_conforms_or_exit(expected_type, expr->type,
+                    "tuple expression");
+            types_added += theorise_equal(expr->type, expected_type);
+            types_added += theorise_equal(expected_type, expr->type);
+        } else {
+            expr->type = expected_type;
+            types_added++;
+        }
         return types_added;
       }
       case EXTERN_EXPR:
@@ -1698,6 +1742,7 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
       }
       case LIST:
       case VECTOR:
+      case TUPLE:
       {
         if (!solid_type(expr->type)) {
             fprintf(stderr, EPFX"%s with no type\n", expr_name(expr->tag));
@@ -1707,11 +1752,6 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
         for (ExprList* l = expr->expr_list; l; l = l->next) {
             result &= check_if_fully_typed_expr(l->expr, hierachy);
         }
-        break;
-      }
-      case TUPLE:
-      {
-        assert(0 && "TODO: TUPLEs");
         break;
       }
       case EXTERN_EXPR:

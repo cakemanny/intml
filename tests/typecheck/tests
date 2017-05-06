@@ -142,6 +142,9 @@ expect_pass "let x = match [2] with y::_ -> y | _ -> 0"
 expect_fail "let x = match 1 with _ -> 10 | _ -> [ 0 ]"
 expect_fail "let x = match 1 with _ -> 10 | _ -> 0 | _ -> [ 0 ]"
 
+expect_pass 'let x = 1, "hi", ()'
+expect_pass 'let f x y = (x, y)  let g = f 1 2'
+
 # type aliases
 expect_pass "type metre = int   let f (w:metre) (h:metre) = w * h / 2"
 expect_pass "type intfunc = int -> int  let apply (f:intfunc) x = f x"

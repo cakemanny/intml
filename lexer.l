@@ -19,7 +19,7 @@ INT     [1-9][0-9]*|0
 ID      [a-z][[:alnum:]_]*
 TYPEID  [A-Z][[:alnum:]_]*
 WS      [ \t\f\v\r]
-
+SYMS    [-+*/=<=():\[\];_,^|@]
 %%
 
  /* multi-line comments */
@@ -105,7 +105,7 @@ fun             { return FUN; }
 "::"            { return CONS; }
 "[|"            { return VSTART; }  /* vectors (not arrays) */
 "|]"            { return VEND; }
-[-+*/=<=():\[\];_,^|@]   { return yytext[0]; }
+{SYMS}          { return yytext[0]; }
 
 {WS}            ; /* Drop whitespace */
 [\n]            { ++yylineno; }
