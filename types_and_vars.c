@@ -423,6 +423,11 @@ static void apply_theory_pat(Pattern* pat, int constraint_id, TypeExpr* theory)
         apply_theory_pat(pat->left, constraint_id, theory);
         apply_theory_pat(pat->right, constraint_id, theory);
         break;
+      case PAT_TUPLE:
+        for (PatternList* l = pat->pat_list; l; l = l->next) {
+            apply_theory_pat(l->pattern, constraint_id, theory);
+        }
+        break;
     }
 }
 
@@ -533,7 +538,7 @@ static void apply_theory(
 static int len_typelist(int acc, TypeExprList* list)
 {
     if (!list) {
-        return 0;
+        return acc;
     }
     return len_typelist(1 + acc, list->next);
 }
@@ -664,6 +669,12 @@ static const char* expr_name(enum ExprTag tag)
             }                                                   \
         } while (0)
 
+static int count_names_pat(Pattern* pat);
+static int count_names_pat_list(PatternList* l, int acc)
+{
+    if (!l) return acc;
+    return count_names_pat_list(l->next, acc + count_names_pat(l->pattern));
+}
 static int count_names_pat(Pattern* pat)
 {
     switch (pat->tag)
@@ -672,6 +683,7 @@ static int count_names_pat(Pattern* pat)
       case PAT_DISCARD: return 0;
       case PAT_CONS: return count_names_pat(pat->left)
                      + count_names_pat(pat->right);
+      case PAT_TUPLE: return count_names_pat_list(pat->pat_list, 0);
     }
     FAIL_MISSED_CASE();
 }
@@ -685,10 +697,24 @@ static void add_names_to_array_pat(Pattern* pat, Symbol** ptr_next)
         add_names_to_array_pat(pat->left, ptr_next);
         add_names_to_array_pat(pat->right, ptr_next);
         return;
+      case PAT_TUPLE:
+        for (PatternList* l = pat->pat_list; l; l = l->next) {
+            add_names_to_array_pat(l->pattern, ptr_next);
+        }
+        return;
     }
 }
 
-static void pattern_match_and_push_vars(Pattern* pat, TypeExpr* init_type)
+static int pat_list_len(PatternList* list)
+{
+    int n = 0;
+    for (; list; list = list->next)
+        n++;
+    return n;
+}
+
+
+static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
 {
     switch (pat->tag)
     {
@@ -718,22 +744,6 @@ static void pattern_match_and_push_vars(Pattern* pat, TypeExpr* init_type)
       }
       case PAT_CONS:
       {
-        // Check for duplicate names
-        int num_names = count_names_pat(pat);
-        Symbol* names = malloc(num_names * sizeof *names);
-        if (!names) { perror("OOM"); abort(); }
-        Symbol* end = names;
-        add_names_to_array_pat(pat, &end);
-        for (Symbol* it = names; it < end - 1; ++it) {
-            for (Symbol* it2 = it + 1; it2 < end; ++it2) {
-                if (*it == *it2) {
-                    fprintf(stderr, EPFX"variable %s bound twice in pattern\n",
-                            *it);
-                    exit(EXIT_FAILURE);
-                }
-            }
-        }
-        free(names);
 
         init_type = deref_if_needed(init_type);
         // Now we need to have that either init_type is a list type or a
@@ -749,13 +759,13 @@ static void pattern_match_and_push_vars(Pattern* pat, TypeExpr* init_type)
             if (!pat->right->type) {
                 pat->right->type = pat->type;
             }
-            pattern_match_and_push_vars(pat->left, pat->left->type);
-            pattern_match_and_push_vars(pat->right, pat->right->type);
+            pattern_match_and_push_vars0(pat->left, pat->left->type);
+            pattern_match_and_push_vars0(pat->right, pat->right->type);
 
         } else if (init_type->tag == TYPE_CONSTRUCTOR
                 && init_type->constructor == symbol("list")) {
-            pattern_match_and_push_vars(pat->left, init_type->param);
-            pattern_match_and_push_vars(pat->right, init_type);
+            pattern_match_and_push_vars0(pat->left, init_type->param);
+            pattern_match_and_push_vars0(pat->right, init_type);
         } else {
             tprintf(stderr,
                     EPFX"expected list type in init for pattern %P\n", pat);
@@ -777,7 +787,79 @@ static void pattern_match_and_push_vars(Pattern* pat, TypeExpr* init_type)
         }
         break;
       }
+      case PAT_TUPLE:
+      {
+        init_type = deref_if_needed(init_type);
+        if (init_type->tag == TYPE_CONSTRAINT) {
+            int ntypes = pat_list_len(pat->pat_list);
+            TypeExpr** typstack = malloc(ntypes * sizeof *typstack);
+            if (!typstack) { perror("out of memory"); abort(); }
+            int typstack_idx = 0;
+
+            for (PatternList* l = pat->pat_list; l; l = l->next) {
+                if (!l->pattern->type) {
+                    typstack[typstack_idx++] =
+                        l->pattern->type = new_type_constraint();
+                } else {
+                    typstack[typstack_idx++] = l->pattern->type;
+                }
+            }
+            if (!pat->type) {
+                TypeExprList* pat_types = NULL;
+                for (int i = ntypes - 1; i >= 0; --i) {
+                    pat_types = type_add(pat_types, typstack[i]);
+                }
+                pat->type = typetuple(pat_types);
+            }
+            theorise_equal(init_type, pat->type);
+            for (PatternList* l = pat->pat_list; l; l = l->next) {
+                pattern_match_and_push_vars0(l->pattern, l->pattern->type);
+            }
+        } else if (init_type->tag == TYPE_TUPLE
+                && len_typelist(init_type->type_list) == pat_list_len(pat->pat_list)) {
+            TypeExprList* tl = init_type->type_list;
+            for (PatternList* l = pat->pat_list; l; l = l->next, tl = tl->next) {
+                pattern_match_and_push_vars0(l->pattern, tl->type);
+            }
+        } else {
+            tprintf(stderr, EPFX"expected %d-tuple type init for pattern %P\n",
+                    pat_list_len(pat->pat_list), pat);
+            tprintf(stderr, "  actual: %T\n", init_type);
+            exit(EXIT_FAILURE);
+        }
+
+        if (pat->type) {
+            typexpr_conforms_or_exit(pat->type, init_type,
+                    "pattern %P in let binding", pat);
+            theorise_equal(pat->type, init_type);
+            theorise_equal(init_type, pat->type);
+        } else {
+            pat->type = init_type;
+        }
+      }
     }
+}
+
+static void pattern_match_and_push_vars(Pattern* pat, TypeExpr* init_type)
+{
+    // Check for duplicate names
+    int num_names = count_names_pat(pat);
+    Symbol* names = malloc(num_names * sizeof *names);
+    if (!names) { perror("out of memory"); abort(); }
+    Symbol* end = names;
+    add_names_to_array_pat(pat, &end);
+    for (Symbol* it = names; it < end - 1; ++it) {
+        for (Symbol* it2 = it + 1; it2 < end; ++it2) {
+            if (*it == *it2) {
+                fprintf(stderr, EPFX"variable %s bound twice in pattern\n",
+                        *it);
+                exit(EXIT_FAILURE);
+            }
+        }
+    }
+    free(names);
+
+    pattern_match_and_push_vars0(pat, init_type);
 }
 
 static int deducetype_expr(Expr* expr)
@@ -1126,9 +1208,6 @@ static int deducetype_expr(Expr* expr)
         dbgtprintf("deduced type for pattern %P: %T\n", expr->binding.pattern,
                 init_type);
 
-        // FIXME: Need to check that the pattern is able to match the type
-        // of the init expression
-
         struct Var* saved_stack_ptr = var_stack_ptr;
         pattern_match_and_push_vars(expr->binding.pattern, init_type);
 
@@ -1283,7 +1362,6 @@ static int deducetype_expr(Expr* expr)
         // The productions need to all be the same type - like a list
         int types_added = deducetype_expr(expr->matchexpr);
         for (CaseList* k = expr->cases; k; k = k->next) {
-            // TODO: Check that the patterns can match the type of matchexpr
             pattern_match_and_push_vars(k->kase->pattern, expr->matchexpr->type);
             struct Var* saved_stack_ptr = var_stack_ptr;
             types_added += deducetype_expr(k->kase->expr);
@@ -1324,6 +1402,13 @@ __pure static _Bool declares_name_pat(Pattern* pat, Symbol name)
       case PAT_DISCARD: return 0;
       case PAT_CONS: return declares_name_pat(pat->left, name)
                      || declares_name_pat(pat->right, name);
+      case PAT_TUPLE:
+        for (PatternList* l = pat->pat_list; l; l = l->next) {
+            if (declares_name_pat(l->pattern, name)) {
+                return 1;
+            }
+        }
+        return 0;
     }
     FAIL_MISSED_CASE();
 }
@@ -1358,6 +1443,15 @@ __pure static TypeExpr** decl_type_ptr_pat(Pattern* pat, Symbol name)
             TypeExpr** left_type = decl_type_ptr_pat(pat->left, name);
             if (left_type) return left_type;
             else return decl_type_ptr_pat(pat->right, name);
+        }
+        case PAT_TUPLE:
+        {
+            for (PatternList* pl = pat->pat_list; pl; pl = pl->next) {
+                TypeExpr** ptype = decl_type_ptr_pat(pl->pattern, name);
+                if (ptype)
+                    return ptype;
+            }
+            return NULL;
         }
     }
     FAIL_MISSED_CASE();
@@ -1656,6 +1750,11 @@ static _Bool check_if_fully_typed_pattern(Pattern* pat, SymList* hierachy)
       case PAT_CONS:
         result &= check_if_fully_typed_pattern(pat->left, hierachy);
         result &= check_if_fully_typed_pattern(pat->right, hierachy);
+        break;
+      case PAT_TUPLE:
+        for (PatternList* l = pat->pat_list; l; l = l->next) {
+            result &= check_if_fully_typed_pattern(l->pattern, hierachy);
+        }
         break;
     }
     return result;

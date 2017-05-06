@@ -140,8 +140,19 @@ expect_pass "let x = match [2] with y::_ -> y | _ -> 0"
 expect_fail "let x = match 1 with _ -> 10 | _ -> [ 0 ]"
 expect_fail "let x = match 1 with _ -> 10 | _ -> 0 | _ -> [ 0 ]"
 
+# tuples
 expect_pass 'let x = 1, "hi", ()'
 expect_pass 'let f x y = (x, y)  let g = f 1 2'
+expect_pass "let x, y = 1, 2"
+expect_pass 'let x, y = 1, "hi"'
+expect_fail 'let x, y = 1, "hi"  let z = x + y'
+expect_fail "let x, x = 1, 2"
+
+expect_pass "let x = match 1, 2 with _ -> 10"
+expect_pass "let x = match 1, 2 with x,y -> x + y"
+expect_fail "let x = match 1 with x, y -> x + y"
+expect_pass "let f z = match z with x, y -> x + y  let w = f (1, 2)"
+expect_fail 'let f z = match z with x, y -> x + y  let w = f (1, "hey")'
 
 # type aliases
 expect_pass "type metre = int   let f (w:metre) (h:metre) = w * h / 2"
