@@ -16,7 +16,9 @@ expect () {
 
 expect ./simple0 42
 expect ./simple1 3
-expect ./simple1.5 1
+if [[ ! "armv7l" == "$(uname -m)" ]]; then
+    expect ./simple1.5 1
+fi
 expect ./simple2 10
 expect ./simple4 11
 expect ./simple5 30

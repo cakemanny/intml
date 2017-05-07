@@ -192,7 +192,7 @@ matching:
 typexpr:
     typexpr ARROW typexpr       { $$ = typearrow($1, $3); }
   | typetuple                   { $$ = typetuple(reversed_types($1));  }
-  | typeterm                    { $$ = $1 }
+  | typeterm                    { $$ = $1; }
   ;
 typeterm:
     '(' typexpr ')'             { $$ = $2; }

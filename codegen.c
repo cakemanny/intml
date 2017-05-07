@@ -59,6 +59,11 @@ main__f:
 
    For storage in memory, words are ordered in increase offsets
    For storage on the stack they are stored in decreasin offsets... (until we fix)
+
+   Struct ABI (arm)
+   ---------
+   Use the arm convention of r0-r3 for arguments and return values
+   | r0 | r1 | r2 | r3 |
 */
 
 /*
@@ -274,108 +279,196 @@ static void add_var_to_locals(Function* func, Symbol name, TypeExpr* type)
 // These functions are designed to look a bit like ARM intructions so
 // that we can easily port there
 typedef const char* reg;
-static reg r0 = "%rax";
-static reg r1 = "%rdi"; // first argument or second word of return
-static reg r2 = "%rsi";
-static reg r3 = "%rdx";
-static reg t0 = "%r10";
-static reg t1 = "%r11";
-static reg sp = "%rsp";
-static reg bp = "%rbp";
+#if defined(__x86_64__)
+    static reg r0 = "%rax";
+    static reg r1 = "%rdi"; // first argument or second word of return
+    static reg r2 = "%rsi";
+    static reg r3 = "%rdx";
+    static reg t0 = "%r10";
+    static reg t1 = "%r11";
+    static reg sp = "%rsp";
+    static reg bp = "%rbp";
+#elif defined(__arm__)
+    static reg r0 = "r0";
+    static reg r1 = "r1"; // first argument or second word of return
+    static reg r2 = "r2";
+    static reg r3 = "r3";
+    static reg t0 = "r4"; // we are saving these on stack in our fn prologue
+    static reg t1 = "r5";
+    static reg sp = "sp";
+    static reg bp = "fp";
+#endif
+
 static inline void ins2(const char* instr, const char* lop, const char* rop)
 {
     fprintf(cgenout, "\t%s\t%s, %s\n", instr, lop, rop);
 }
 static inline void ins2_imm(const char* instr, long long immval, const char* rop)
 {
-#ifdef _WIN32
-    fprintf(cgenout,"\t%s\t$%I64d, %s\n", instr, immval, rop);
-#else
-    fprintf(cgenout,"\t%s\t$%lld, %s\n", instr, immval, rop);
-#endif
+    #ifdef _WIN32
+        fprintf(cgenout,"\t%s\t$%I64d, %s\n", instr, immval, rop);
+    #else
+        fprintf(cgenout,"\t%s\t$%lld, %s\n", instr, immval, rop);
+    #endif
 }
+
+#ifdef __arm__
+  static inline void ins2_imm_rtl(const char* instr, const char* lop, int immval)
+  {
+      fprintf(cgenout, "	%s	%s, #%d\n", instr, lop, immval);
+  }
+
+  static inline void ins3(
+          const char* instr, const char* dst, const char* lop, const char* rop)
+  {
+      fprintf(cgenout, "	%s	%s, %s, %s\n", instr, dst, lop, rop);
+  }
+#endif
+
 static inline void ins1(const char* instr, const char* op)
 {
     fprintf(cgenout, "\t%s\t%s\n", instr, op);
 }
+
 static void add(reg dst, reg op1, reg op2)
 {
-    if (dst == op1) {
-        ins2("addq", op2, dst); // left to right because we are AT&T syntax
-    } else if (dst == op2) {
-        ins2("addq", op1, dst);
-    } else { // what if dst == op2?
-        ins2("movq", op1, dst);
-        ins2("addq", op2, dst);
-    }
+    #ifdef __x86_64__
+        if (dst == op1) {
+            ins2("addq", op2, dst); // left to right because we are AT&T syntax
+        } else if (dst == op2) {
+            ins2("addq", op1, dst);
+        } else { // what if dst == op2?
+            ins2("movq", op1, dst);
+            ins2("addq", op2, dst);
+        }
+    #else
+        ins3("add", dst, op1, op2);
+    #endif
 }
 static inline void add_imm(reg dst, long long amount)
 {
-    ins2_imm("addq", amount, dst);
+    #ifdef __x86_64__
+        ins2_imm("addq", amount, dst);
+    #else
+        ins2_imm_rtl("add", dst, amount);
+    #endif
 }
 static void mul(reg dst, reg op1, reg op2)
 {
-    if (dst == op1) {
-        ins2("imulq", op2, dst);
-    } else if (dst == op2) {
-        ins2("imulq", op1, dst);
-    } else { // what if dst == op2?
-        ins2("movq", op1, dst);
-        ins2("imulq", op2, dst);
-    }
+    #ifdef __x86_64__
+        if (dst == op1) {
+            ins2("imulq", op2, dst);
+        } else if (dst == op2) {
+            ins2("imulq", op1, dst);
+        } else { // what if dst == op2?
+            ins2("movq", op1, dst);
+            ins2("imulq", op2, dst);
+        }
+    #else
+        ins3("mul", dst, op1, op2);
+    #endif
 }
 static void sub(reg dst, reg minuend, reg amount)
 {
-    if (dst == minuend) {
-        ins2("subq", amount, dst);
-    } else if (dst == amount) {
-        ins2("subq", minuend, dst);
-        ins1("negq", dst);
-    } else {
-        ins2("movq", minuend, dst);
-        ins2("subq", amount, dst);
-    }
+    #ifdef __x86_64__
+        if (dst == minuend) {
+            ins2("subq", amount, dst);
+        } else if (dst == amount) {
+            ins2("subq", minuend, dst);
+            ins1("negq", dst);
+        } else {
+            ins2("movq", minuend, dst);
+            ins2("subq", amount, dst);
+        }
+    #else
+        ins3("sub", dst, minuend, amount);
+    #endif
 }
 static inline void sub_imm(reg dst, long long amount)
 {
-    ins2_imm("subq", amount, dst);
+    #ifdef __x86_64__
+        ins2_imm("subq", amount, dst);
+    #else
+        ins2_imm_rtl("sub", dst, amount);
+    #endif
 }
 // load but with a comment to help debugging
 static void loadc(reg dst, reg src, int off, const char* comment)
 {
-    fprintf(cgenout,"\tmovq\t%d(%s), %s", off, src, dst);
-    if (comment) fprintf(cgenout,"\t\t# %s\n", comment);
-    else fputs("\n", cgenout);
+    #ifdef __x86_64__
+        fprintf(cgenout,"\tmovq\t%d(%s), %s", off, src, dst);
+        if (comment) fprintf(cgenout,"\t\t# %s\n", comment);
+        else fputs("\n", cgenout);
+    #else
+        fprintf(cgenout, "	ldr	%s, [%s, #%d]", dst, src, off);
+        if (comment) fprintf(cgenout, "\t\t@@ %s\n", comment);
+        else fputs("\n", cgenout);
+    #endif
 }
 static void store(int off, reg dst, reg src)
 {
-    fprintf(cgenout,"\tmovq\t%s, %d(%s)\n", src, off, dst);
+    #ifdef __x86_64__
+        fprintf(cgenout,"\tmovq\t%s, %d(%s)\n", src, off, dst);
+    #else
+        fprintf(cgenout, "	str	%s, [%s, #%d]\n", src, dst, off);
+    #endif
 }
 static void mov_imm(reg dst, long long intval)
 {
-    ins2_imm("movq", intval, dst);
+    #ifdef __x86_64__
+        ins2_imm("movq", intval, dst);
+    #else
+        // arm can only hold rotated single byte in immediate
+        // use ldr and = to have assembler pick automatically whether
+        // immediate or store in constant pool
+        char* s; asprintf(&s, "=%lld", intval);
+        ins2("ldr", dst, s);
+        free(s);
+    #endif
 }
 static void mov(reg dst, reg src)
 {
-    ins2("movq", src, dst);
+    #ifdef __x86_64__
+        ins2("movq", src, dst);
+    #else
+        ins2("mov", dst, src);
+    #endif
 }
 static void pop(reg dst)
 {
-    ins1("popq", dst);
+    #ifdef __x86_64__
+        ins1("popq", dst);
+    #else
+        fprintf(cgenout, "\tpop\t{%s}\n", dst);
+    #endif
 }
 static void popd() /* Discard item on stack*/ { add_imm(sp, WORD_SIZE); }
 static void push(reg op0)
 {
-    ins1("pushq", op0);
+    #ifdef __x86_64__
+        ins1("pushq", op0);
+    #else
+        fprintf(cgenout, "\tpush\t{%s}\n", op0);
+    #endif
 }
+
 static void pushd() /* used to align the stack */ { sub_imm(sp, WORD_SIZE); }
 static void cmp(reg left, reg right)
 {
-    ins2("cmpq", right, left); // do these
+    #ifdef __x86_64__
+        ins2("cmpq", right, left); // do these
+    #else
+        ins2("cmp", left, right); // do these
+    #endif
 }
 static void cmp_imm(reg left, long long imm)
 {
-    ins2_imm("cmpq", imm, left);
+
+    #ifdef __x86_64__
+        ins2_imm("cmpq", imm, left);
+    #else
+        ins2_imm_rtl("cmp", left, imm);
+    #endif
 }
 
 /*
@@ -392,31 +485,59 @@ static void label(int label_number)
 }
 static void beq(int label) // branch equal
 {
-    fprintf(cgenout, "\tje\tL%d\n", label);
+    #ifdef __x86_64__
+        fprintf(cgenout, "\tje\tL%d\n", label);
+    #else
+        fprintf(cgenout, "\tbeq\tL%d\n", label);
+    #endif
 }
 static void bne(int label) // branch equal
 {
-    fprintf(cgenout, "\tjne\tL%d\n", label);
+    #ifdef __x86_64__
+        fprintf(cgenout, "\tjne\tL%d\n", label);
+    #else
+        fprintf(cgenout, "\tbne\tL%d\n", label);
+    #endif
 }
 static void bgt(int label) // branch equal
 {
-    fprintf(cgenout, "\tjg\tL%d\n", label);
+    #ifdef __x86_64__
+        fprintf(cgenout, "\tjg\tL%d\n", label);
+    #else
+        fprintf(cgenout, "\tbgt\tL%d\n", label);
+    #endif
 }
 static void bge(int label) // branch equal
 {
-    fprintf(cgenout, "\tjge\tL%d\n", label);
+    #ifdef __x86_64__
+        fprintf(cgenout, "\tjge\tL%d\n", label);
+    #else
+        fprintf(cgenout, "\tbge\tL%d\n", label);
+    #endif
 }
 static void b(int label)
 {
-    fprintf(cgenout, "\tjmp\tL%d\n", label);
+    #ifdef __x86_64__
+        fprintf(cgenout, "\tjmp\tL%d\n", label);
+    #else
+        fprintf(cgenout, "\tb\tL%d\n", label);
+    #endif
 }
 static void call_reg(reg op)
 {
-    fprintf(cgenout,"\tcallq\t*%s\n", op);
+    #ifdef __x86_64__
+        fprintf(cgenout,"\tcallq\t*%s\n", op);
+    #else
+        fprintf(cgenout, "\tblx\t%s\n", op);
+    #endif
 }
 static void call(const char* label)
 {
-    fprintf(cgenout, "	callq	%s\n", label);
+    #ifdef __x86_64__
+        fprintf(cgenout, "	callq	%s\n", label);
+    #else
+        fprintf(cgenout, "	bl	%s\n", label);
+    #endif
 }
 static void alloc(int size)
 {
@@ -426,6 +547,9 @@ static void alloc(int size)
     call("_malloc");
 #elif defined(__linux__) && defined(__x86_64__)
     mov_imm("%rdi", size);
+    call("malloc");
+#elif defined(__linux__) && defined(__arm__)
+    mov_imm(r0, size);
     call("malloc");
 #elif defined(_WIN32) && defined(__x86_64__)
     // allocate shadow space
@@ -445,6 +569,9 @@ static void exit_imm(int exit_code)
     call("__exit");
 #elif defined(__linux__) && defined(__x86_64__)
     mov_imm("%rdi", exit_code);
+    call("_exit");
+#elif defined(__linux__) && defined(__arm__)
+    mov_imm(r0, exit_code);
     call("_exit");
 #elif defined(_WIN32) && defined(__x86_64__)
     // allocate shadow space
@@ -519,11 +646,20 @@ static void emit_fn_prologue(Function* func)
     char* lbl = function_label(func);
     fprintf(cgenout, "%s:\n", lbl);
     free(lbl);
+#ifdef __x86_64__
     fputs("\
 	pushq	%rbp\n\
 	movq	%rsp, %rbp\n\
 ", cgenout);
     fprintf(cgenout, "\tsubq\t$%d, %s\n", stack_required(func), sp);
+#else
+    fputs("\
+	mov	ip, sp\n\
+	push	{fp, ip, lr, pc}\n\
+	push	{r4-r11}\n\
+", cgenout);
+    sub_imm(sp, stack_required(func));
+#endif
     // Move ptr to closure into stack location
     store(closure_offset(func), bp, r1);
     if (stack_size_of_type(func->type->left) > 0) {
@@ -535,11 +671,17 @@ static void emit_fn_prologue(Function* func)
 }
 static void emit_fn_epilogue(Function* func)
 {
+#ifdef __x86_64__
     fprintf(cgenout, "\taddq\t$%d, %s\n", stack_required(func), sp);
     fputs("\
 	popq	%rbp\n\
 	retq\n\
 ", cgenout);
+#else
+    add_imm(sp, stack_required(func));
+    fputs("	pop {r4-r11}\n", cgenout);
+    fputs("	ldm	sp, {fp, sp, pc}\n", cgenout);
+#endif
 }
 
 #ifdef __x86_64__
@@ -767,7 +909,8 @@ static void gen_stack_machine_code(Expr* expr)
             fprintf(cgenout, "\txorq\t%s, %s\n", "%rdx", "%rdx");
             ins1("idiv", t0);
 #else
-#           error "not implemented division yet"
+            assert(0 && "TODO: division on arm");
+            mov_imm(r0, 0LL);
 #endif
             break;
         case LESSTHAN:
@@ -870,7 +1013,7 @@ static void gen_stack_machine_code(Expr* expr)
             // 1. Emit string constant into the constants area with a label
             // 2. Emit a load instruction
             int lvalue = request_label();
-            fputs(".p2align 3\n", dataout);
+            fprintf(dataout, ".p2align %d\n", __builtin_ctz(WORD_SIZE));
             fprintf(dataout, "L%d:\n", lvalue);
             fputs("\t.string \"", dataout);
             const char* s = expr->strval;
@@ -883,13 +1026,20 @@ static void gen_stack_machine_code(Expr* expr)
             }
             fputs("\"\n", dataout);
 
+#ifdef __x86_64__
             int llen = request_label();
-            fputs(".p2align 3\n", dataout);
+            fprintf(dataout, ".p2align 3\n");
             fprintf(dataout, "L%d:\n", llen);
             fprintf(dataout, "\t.int %lu\n", strlen(expr->strval));
             fprintf(cgenout, "	leaq	L%d(%s), %s\n", llen, "%rip", t0);
             loadc(r0, t0, 0, "length of string");
             fprintf(cgenout, "	leaq	L%d(%s), %s\n", lvalue, "%rip", r1);
+#elif defined(__arm__)
+            fprintf(cgenout, "	ldr	%s,	=%u\n", t0, strlen(expr->strval));
+            fprintf(cgenout, "	ldr	%s, =L%d\n", r1, lvalue);
+#else
+#   error "Unknown platform"
+#endif
             break;
         }
         case RECFUNC_EXPR:
@@ -913,7 +1063,11 @@ static void gen_stack_machine_code(Expr* expr)
             assert(expr->func.var_id < var_table_count);
             const VarEx varx = variable_table[expr->func.var_id];
             char* lbl = function_label(func);
+#ifdef __x86_64__
             fprintf(cgenout, "\tleaq\t%s(%s), %s\n", lbl, "%rip", r0);
+#else
+            fprintf(cgenout, "	ldr	%s, =%s\n", r0, lbl);
+#endif
             store(-varx.stack_offset, bp, r0);
             free(lbl);
             // allocate closure, fill it and store in correct location
@@ -1177,6 +1331,18 @@ _start:\n\
 	movq	%rax, %rdi\n\
 	movq	$60, %rax		# _exit\n\
 	syscall\n\
+\n\
+", cgenout);
+#elif defined(__linux__) && defined(__arm__)
+    fputs("\
+.section .interp\n\
+	.string \"/lib/ld-linux-armhf.so.3\"\n\
+.text\n\
+.global _start\n\
+_start:\n\
+	bl  	start__0	@ will leave exit code in r0\n\
+    mov		r7, #1\n\
+	swi		0\n\
 \n\
 ", cgenout);
 #elif defined(_WIN32) && defined(__x86_64__)
