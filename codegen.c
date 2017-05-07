@@ -542,6 +542,17 @@ static void emit_fn_epilogue(Function* func)
 ", cgenout);
 }
 
+#ifdef __x86_64__
+#   define ASM_COMMENT "# "
+#else
+#   define ASM_COMMENT "@ "
+#endif
+#define dbg_comment(FMT, ...) do {                              \
+    if (debug_codegen) {                                        \
+        fprintf(cgenout, ASM_COMMENT FMT "\n", ##__VA_ARGS__);  \
+    }                                                           \
+} while (0)
+
 
 /*----------------------------------------`
 | Tree walk code gen                      |
@@ -567,7 +578,7 @@ static void gen_stack_machine_code(Expr* expr);
  */
 static void gen_list_from_end(ExprList* list, int node_size)
 {
-    assert(node_size == 2 * WORD_SIZE); // just for time being
+    assert(node_size <= 4 * WORD_SIZE); // just for time being
     if (list) {
         // put the tail of list in r0
         gen_list_from_end(list->next, node_size);
@@ -575,6 +586,8 @@ static void gen_list_from_end(ExprList* list, int node_size)
         pushd(); // align stack
         gen_stack_machine_code(list->expr); // result now in r0, r1, ...
         // ASSUMING elem size == WORD_SIZE
+        if (node_size >= 4 * WORD_SIZE) mov(r3, r2);
+        if (node_size >= 3 * WORD_SIZE) mov(r2, r1);
         mov(r1, r0); // data goes into word 2
         popd();  // return stack pointer to point at our prev r0
         //pop(r0); // the address of the tail.
@@ -582,8 +595,20 @@ static void gen_list_from_end(ExprList* list, int node_size)
         // Save the generated value on the stack...
         //push(r0);
         push(r1);
+        if (node_size >= 3 * WORD_SIZE) {
+            push(r2);
+            push(r3);
+        }
         // allocate memory to save the data
         alloc(node_size); // == 2 * WORD_SIZE atm
+
+        if (node_size >= 3 * WORD_SIZE) {
+            pop(t1);
+            pop(t0);
+            store(2 * WORD_SIZE, r0, t0);
+            if (node_size >= 4 * WORD_SIZE)
+                store(3 * WORD_SIZE, r0, t1);
+        }
         pop(t1);
         pop(t0);
         // copy the data to memory
@@ -663,6 +688,37 @@ static void gen_sm_unapply_pat(Pattern* pat)
         label(end_of_matching);
         // No need to do anything here - if was null then 0 still in r0
         break;
+      }
+      case PAT_TUPLE:
+      {
+        // We can assume that we have the same type as the init value,
+        // including number of items in the tuple
+        assert(stack_size_of_type(pat->type) <= 4 * WORD_SIZE);
+        reg rs[4] = { "%r12", "%r13", "%r14", "%r15" };
+        reg drs[4] = { r0, r1, r2, r3 };
+        const int word_size_ctz = __builtin_ctz(WORD_SIZE);
+        int stack_size = stack_size_of_type(pat->type);
+        // Shuffle data about
+        dbg_comment("PAT_TUPLE: save acc to callee-saved registers");
+        for (int i = 0, n = stack_size >> word_size_ctz; i < n; i++) {
+            push(rs[n - 1 - i]); // Save r12-r15
+            mov(rs[n - 1 - i], drs[n - 1 - i]); // copy r0-r3 int r12-r15
+        }
+        //  Fill variables with the data
+        dbg_comment("PAT_TUPLE: fill variables with values");
+        int rs_idx = 0;
+        for (PatternList* l = pat->pat_list; l; l = l->next) {
+            int words = stack_size_of_type(l->pattern->type) >> word_size_ctz;
+            for (int i = 0; i < words; i++, rs_idx++) {
+                mov(drs[i], rs[rs_idx]);
+            }
+            gen_sm_unapply_pat(l->pattern);
+        }
+        // Shuffle data back
+        dbg_comment("PAT_TUPLE: restore callee-saved registers");
+        for (int i = 0, n = stack_size >> word_size_ctz; i < n; i++) {
+            pop(rs[i]); // Restore r12-r15 per constract
+        }
       }
     }
 }
@@ -964,14 +1020,18 @@ static void gen_stack_machine_code(Expr* expr)
             // byte
             assert(stack_size_of_type(expr->type) <= 4 * WORD_SIZE);
             assert(stack_size_of_type(expr->type) >= 2 * WORD_SIZE);
-
             for (ExprList* l = expr->expr_list; l; l = l->next) {
+                dbg_comment("TUPLE: gen init for tuple elem");
                 gen_stack_machine_code(l->expr);
+                dbg_comment("TUPLE: save calculated value");
+                // Since we are going forward through the list
+                // push the words on in order
                 switch (stack_size_of_type(l->expr->type)) {
                     case 4 * WORD_SIZE:
-                    case 3 * WORD_SIZE: push(r3); push(r2);
+                    case 3 * WORD_SIZE: push(r0); push(r1); push(r2); push(r3);
+                                        break;
                     case 2 * WORD_SIZE:
-                    case 1 * WORD_SIZE: push(r1); push(r0);
+                    case 1 * WORD_SIZE: push(r0); push(r1);
                     case 0:
                         break;
                     default: assert(0 && "TODO: any size tuple"); break;
@@ -993,8 +1053,11 @@ static void gen_stack_machine_code(Expr* expr)
             // iterate backwars through the expression results and the
             // destination registers
             reg rs[4] = { r0, r1, r2, r3 };
-            for (int i = 3, j = 3; i >= 0; --i) {
+            int j = -1 +
+                (stack_size_of_type(expr->type) >> __builtin_ctz(WORD_SIZE));
+            for (int i = 3; i >= 0; --i) {
                 if (ls[i]) {
+                    dbg_comment("TUPLE: load component %d" , i);
                     switch (stack_size_of_type(ls[i]->expr->type)) {
                         case 4 * WORD_SIZE: // all words important
                             pop(rs[j--]);pop(rs[j--]);pop(rs[j--]);pop(rs[j--]);
@@ -1247,6 +1310,10 @@ static void calculate_activation_records_pat(Pattern* pat, Function* curr_func)
         calculate_activation_records_pat(pat->left, curr_func);
         calculate_activation_records_pat(pat->right, curr_func);
         break;
+      case PAT_TUPLE:
+        for (PatternList* l = pat->pat_list; l; l = l->next) {
+            calculate_activation_records_pat(l->pattern, curr_func);
+        }
     }
 }
 

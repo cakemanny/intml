@@ -103,7 +103,13 @@ let sum =
 let main () = sum [ 4; 3; 2; 1; 0 ]
 " 10
 
+expect2 "let main () = let x, y = 1, 2 in x + y" 3
+expect2 "let main () = let x, y, z = 2, 3, 5 in x * y * z" 30
 
+expect2 "let main () =
+let (w,x) :: (y,z) :: _ = [ (2, 3); (5, 7); (11,13) ]
+in w * x * y * z
+" 210
 
 # Exit with the number of failing tests
 exit $exitcode
