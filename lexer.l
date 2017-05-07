@@ -17,9 +17,9 @@ char* strbuf_end = strbuf + MAXSTRLITLEN;
 
 INT     [1-9][0-9]*|0
 ID      [a-z][[:alnum:]_]*
-TYPE    [A-Z][[:alnum:]_]*
+TYPEID  [A-Z][[:alnum:]_]*
 WS      [ \t\f\v\r]
-
+SYMS    [-+*/=<=():\[\];_,^|@]
 %%
 
  /* multi-line comments */
@@ -81,26 +81,31 @@ WS      [ \t\f\v\r]
 
  /* keywords */
 let             { return LET; }
+rec             { return REC; }
 in              { return IN; }
 type            { return TYPE; }
 if              { return IF; }
 then            { return THEN; }
 else            { return ELSE; }
+external        { return EXTERNAL; }
+match           { return MATCH; }
+with            { return WITH; }
+function        { return FUNCTION; }
+fun             { return FUN; }
 
  /* built in types*/
 {INT}           { yylval.intval = atoi(yytext); return INT; }
-"()"            { return UNIT; }
 
 {ID}            { yylval.identifier = symbol(yytext); return ID; }
  /* actually constructor */
-{TYPE}          { yylval.identifier = symbol(yytext); return TYPE; }
+{TYPEID}        { yylval.identifier = symbol(yytext); return TYPEID; }
  /* punctuation */
 "->"            { return ARROW; }
 "<="            { return LE; }
 "::"            { return CONS; }
 "[|"            { return VSTART; }  /* vectors (not arrays) */
 "|]"            { return VEND; }
-[-+*/=<=():\[\];_,]     { return yytext[0]; }
+{SYMS}          { return yytext[0]; }
 
 {WS}            ; /* Drop whitespace */
 [\n]            { ++yylineno; }

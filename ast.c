@@ -17,15 +17,6 @@ static void* xmalloc(size_t size)
 }
 
 
-DeclarationList* declaration_list(Declaration* node)
-{
-    DeclarationList* result = xmalloc(sizeof *result);
-    result->declaration = node;
-    result->next = NULL;
-    return result;
-}
-
-
 DeclarationList* add_declaration(DeclarationList* list, Declaration* node)
 {
     DeclarationList* result = xmalloc(sizeof *result);
@@ -34,35 +25,60 @@ DeclarationList* add_declaration(DeclarationList* list, Declaration* node)
     return result;
 }
 
-DeclarationList* reverse_declarations(DeclarationList* list)
+DeclarationList* declaration_list(Declaration* node)
 {
-    DeclarationList* tmp = NULL;
-    DeclarationList* newhead = NULL;
-    for (DeclarationList* c = list; c; c = tmp)
-    {
-        /*
-         *  A -> B -> C -> NULL
-         *  A -> NULL,          B -> C -> NULL
-         *  B -> A -> NULL,     C -> NULL
-         *  C -> B -> A -> NULL
-         */
-        tmp = c->next;      // Grab C
-        c->next = newhead;  // Repoint B
-        newhead = c;        // adjust new head
-        // c = tmp (in for above) // move next
-    }
-    return newhead;
+    return add_declaration(NULL, node);
 }
 
-Declaration* func(Symbol name, ParamList* params, Expr* body)
+
+#define REVERSE_LIST_IMPL(T, list)              \
+{                                               \
+    T* tmp;                                     \
+    T* newhead = NULL;                          \
+    while (list) { /* three pointer shuffle! */ \
+        tmp         = list->next;               \
+        list->next  = newhead;                  \
+        newhead     = list;                     \
+        list        = tmp;                      \
+    }                                           \
+    return newhead;                             \
+}
+
+DeclarationList* reverse_declarations(DeclarationList* list)
+{
+    REVERSE_LIST_IMPL(DeclarationList, list);
+}
+
+Declaration* func_w_type(
+        Symbol name, ParamList* params, TypeExpr* type, Expr* body)
 {
     Declaration* result = xmalloc(sizeof *result);
     result->tag = DECL_FUNC;
     result->func.name = name;
     result->func.params = params;
     result->func.body = body;
-    result->func.type = NULL;
+    result->func.resulttype = type;
+
+    result->func.type = NULL; /* deduced by type checker */
     return result;
+}
+
+Declaration* func(Symbol name, ParamList* params, Expr* body)
+{
+    return func_w_type(name, params, NULL, body);
+}
+
+Declaration* recfunc_w_type(
+        Symbol name, ParamList* params, TypeExpr* type, Expr* body)
+{
+    Declaration* result = func_w_type(name, params, type, body);
+    result->tag = DECL_RECFUNC;
+    return result;
+}
+
+Declaration* recfunc(Symbol name, ParamList* params, Expr* body)
+{
+    return recfunc_w_type(name, params, NULL, body);
 }
 
 Declaration* binding(Pattern* pattern, Expr* init)
@@ -85,6 +101,16 @@ Declaration* type(Symbol name, TypeExpr* definition)
     return result;
 }
 
+Declaration* externdecl(Symbol name, TypeExpr* type, Symbol external_name)
+{
+    Declaration* result = xmalloc(sizeof *result);
+    result->tag = DECL_EXTERN;
+    result->ext.name = name;
+    result->ext.type = type;
+    result->ext.external_name = external_name;
+    return result;
+}
+
 Param* param_with_type(Symbol name, TypeExpr* type)
 {
     Param* param = xmalloc(sizeof *param);
@@ -94,10 +120,12 @@ Param* param_with_type(Symbol name, TypeExpr* type)
     return param;
 
 }
+
 Param* param(Symbol name)
 {
     return param_with_type(name, NULL);
 }
+
 
 ParamList* add_param(ParamList* list, Param* param)
 {
@@ -107,27 +135,16 @@ ParamList* add_param(ParamList* list, Param* param)
     return result;
 }
 
-
 ParamList* param_list(Param* param)
 {
-    ParamList* list = xmalloc(sizeof *list);
-    list->param = param;
-    list->next = NULL;
-    return list;
+    return add_param(NULL, param);
 }
 
 ParamList* reverse_params(ParamList* list)
 {
-    ParamList* tmp;
-    ParamList* newhead = NULL;
-    while (list) { // three pointer shuffle!
-        tmp         = list->next;
-        list->next  = newhead;
-        newhead     = list;
-        list        = tmp;
-    }
-    return newhead;
+    REVERSE_LIST_IMPL(ParamList, list);
 }
+
 
 static Expr* binexpr(int tag, Expr* left, Expr* right)
 {
@@ -211,19 +228,41 @@ Expr* strval(Symbol text)
     return result;
 }
 
-Expr* local_func(Symbol name, ParamList* params, Expr* body, Expr* subexpr)
+Expr* local_func_w_type(
+        Symbol name, ParamList* params, TypeExpr* resulttype, Expr* body,
+        Expr* subexpr)
 {
     Expr* result = expr(FUNC_EXPR);
     FuncExpr* func = &result->func;
     func->name = name;
     func->params = params;
+    func->resulttype = resulttype;
     func->body = body;
     func->subexpr = subexpr;
 
-    func->functype = NULL; /* deduced by type checker */
+    func->functype = NULL;  /* deduced by typechecker */
     func->function_id = -1; /* assigned by codegen */
     func->var_id = -1;      /* assigned by codegen */
     return result;
+}
+
+Expr* local_func(Symbol name, ParamList* params, Expr* body, Expr* subexpr)
+{
+    return local_func_w_type(name, params, NULL, body, subexpr);
+}
+
+Expr* local_recfunc_w_type(
+        Symbol name, ParamList* params, TypeExpr* resulttype, Expr* body,
+        Expr* subexpr)
+{
+    Expr* result = local_func_w_type(name, params, resulttype, body, subexpr);
+    result->tag = RECFUNC_EXPR;
+    return result;
+}
+
+Expr* local_recfunc(Symbol name, ParamList* params, Expr* body, Expr* subexpr)
+{
+    return local_recfunc_w_type(name, params, NULL, body, subexpr);
 }
 
 Expr* local_binding(Pattern* pattern, Expr* init, Expr* subexpr)
@@ -266,6 +305,26 @@ Expr* tuple(ExprList* exprs)
     return result;
 }
 
+Expr* local_extern(Symbol name, TypeExpr* type, Symbol external_name, Expr* subexpr)
+{
+    Expr* result = expr(EXTERN_EXPR);
+    result->ext.name = name;
+    result->ext.functype = type;    // call functype since exprs have types
+    result->ext.external_name = external_name;
+    result->ext.subexpr = subexpr;
+
+    result->ext.var_id = -1; /* assigned by codegen */
+    return result;
+}
+
+Expr* match(Expr* matchexpr, CaseList* cases)
+{
+    Expr* result = expr(MATCH_EXPR);
+    result->matchexpr = matchexpr;
+    result->cases = cases;
+    return result;
+}
+
 ExprList* exprlist()
 {
     return NULL;
@@ -281,15 +340,7 @@ ExprList* add_expr(ExprList* list, Expr* to_add)
 
 ExprList* reverse_list(ExprList* list)
 {
-    ExprList* tmp;
-    ExprList* newhead = NULL;
-    while (list) { // three pointer shuffle!
-        tmp         = list->next;
-        list->next  = newhead;
-        newhead     = list;
-        list        = tmp;
-    }
-    return newhead;
+    REVERSE_LIST_IMPL(ExprList, list);
 }
 
 
@@ -322,11 +373,10 @@ TypeExpr* typeconstraint(int constraint_id)
     return result;
 }
 
-TypeExpr* typetuple(TypeExpr* left, TypeExpr* right)
+TypeExpr* typetuple(TypeExprList* types)
 {
     struct TypeExpr* result = typexpr(TYPE_TUPLE);
-    result->left = left;
-    result->right = right;
+    result->type_list = types;
     return result;
 }
 
@@ -337,6 +387,34 @@ TypeExpr* typeconstructor(TypeExpr* param, Symbol constructor)
     result->constructor = constructor;
     return result;
 }
+
+TypeExprList* type_add(TypeExprList* list, TypeExpr* newhead)
+{
+    struct TypeExprList* result = xmalloc(sizeof *result);
+    result->type = newhead;
+    result->next = list;
+    return result;
+}
+
+TypeExprList* type_list(TypeExpr* head)
+{
+    return type_add(NULL, head);
+}
+
+// helper for subsequent reversed_types
+static TypeExprList* rev_type_go(TypeExprList* acc, TypeExprList* list)
+{
+    if (!list) {
+        return acc;
+    }
+    // otherwise move from head of input to head of output
+    return rev_type_go(type_add(acc, list->type), list->next);
+}
+TypeExprList* reversed_types(TypeExprList* list)
+{
+    return rev_type_go(NULL, list);
+}
+
 
 static struct Pattern* pat(enum PatternTag tag)
 {
@@ -359,12 +437,161 @@ Pattern* pat_discard()
     return pat(PAT_DISCARD);
 }
 
-Pattern* pat_list(Pattern* head, Pattern* tail)
+Pattern* pat_cons(Pattern* head, Pattern* tail)
 {
     struct Pattern* result = pat(PAT_CONS);
     result->left = head;
     result->right = tail;
     return result;
+}
+
+Pattern* pat_tuple(PatternList* list)
+{
+    struct Pattern* result = pat(PAT_TUPLE);
+    result->pat_list = list;
+    return result;
+}
+
+PatternList* add_pat(PatternList* list, Pattern* newhead)
+{
+    PatternList* result = xmalloc(sizeof *result);
+    result->pattern = newhead;
+    result->next = list;
+    return result;
+}
+
+PatternList* pat_nel(Pattern* head)
+{
+    return add_pat(NULL, head);
+}
+
+PatternList* reverse_patterns(PatternList* list)
+{
+    REVERSE_LIST_IMPL(PatternList, list);
+}
+
+static TPat* tpat(enum TPatTag tag)
+{
+    TPat* tp = xmalloc(sizeof *tp);
+    tp->tag = tag;
+    return tp;
+}
+TPat* tpat_var(Symbol name)
+{
+    TPat* tp = tpat(TPAT_VAR);
+    tp->name = name;
+    return tp;
+}
+TPat* tpat_discard() { return tpat(TPAT_DISCARD); }
+TPat* tpat_cons(TPat* head, TPat* tail)
+{
+    TPat* tp = tpat(TPAT_CONS);
+    tp->left = head;
+    tp->right = tail;
+    return tp;
+}
+TPat* tpat_tuple(TPat* first, TPat* rest)
+{
+    TPat* tp = tpat(TPAT_TUPLE);
+    tp->left = first;
+    tp->right = rest;
+    return tp;
+}
+TPat* tpat_pattern(Pattern* pattern)
+{
+    TPat* tp = tpat(TPAT_PATTERN);
+    tp->pattern = pattern;
+    return tp;
+}
+
+void print_tpat(FILE* out, TPat* tpat)
+{
+    fputc('(', out);
+    switch (tpat->tag) {
+        case TPAT_VAR:
+            fprintf(out, "tvar %s", tpat->name);
+            break;
+        case TPAT_DISCARD:
+            fputs("tdiscard", out);
+            break;
+        case TPAT_CONS:
+            fputs("tcons ", out);
+            print_tpat(out, tpat->left);
+            fputs(" ", out);
+            print_tpat(out, tpat->right);
+            break;
+        case TPAT_TUPLE:
+            fputs("ttuple ", out);
+            print_tpat(out, tpat->left);
+            fputs(" ", out);
+            print_tpat(out, tpat->right);
+            break;
+        case TPAT_PATTERN:
+            fputs("tpattern ", out);
+            print_pattern(out, tpat->pattern);
+            break;
+    }
+    fputc(')', out);
+}
+
+Pattern* tpat_to_pat(TPat* tpat)
+{
+#define FF(x) ({ Pattern* __result = (x); free(tpat); __result; })
+    switch (tpat->tag) {
+        case TPAT_VAR:
+            return FF(pat_var(tpat->name));
+        case TPAT_DISCARD:
+            return FF(pat_discard());
+        case TPAT_CONS:
+            return FF(pat_cons(tpat_to_pat(tpat->left), tpat_to_pat(tpat->right)));
+        case TPAT_PATTERN:
+            return FF(tpat->pattern);
+        case TPAT_TUPLE:
+        {
+            PatternList* result = NULL;
+            TPat* tmp = tpat;
+            while (tmp->tag == TPAT_TUPLE) {
+                result = add_pat(result, tpat_to_pat(tmp->right));
+
+                TPat* tmp2 = tmp->left;
+                free(tmp);
+                tmp = tmp2;
+            }
+            result = add_pat(result, tpat_to_pat(tmp));
+            return pat_tuple(result);
+        }
+    }
+#undef FF
+    //fprintf(stderr, "%s, %s:%d\n", __FUNCTION__, __FILE__, __LINE__);
+    //abort();
+}
+
+
+Case* matchcase(Pattern* pattern, Expr* expr)
+{
+    Case* result = xmalloc(sizeof *result);
+    result->pattern = pattern;
+    result->expr = expr;
+    return result;
+}
+
+CaseList* case_add(CaseList* list, Case* kase)
+{
+    CaseList* result = xmalloc(sizeof *result);
+    result->kase = kase;
+    result->next = list;
+    return result;
+}
+
+CaseList* caselist(Case* head)
+{
+    return case_add(NULL, head);
+}
+
+
+CaseList* reverse_cases(CaseList* list)
+{
+    REVERSE_LIST_IMPL(CaseList, list);
 }
 
 /*----------------------------------------*\
@@ -388,10 +615,18 @@ void print_typexpr(FILE* out, TypeExpr* expr)
         fprintf(out, "'%d", expr->constraint_id);
         break;
     case TYPE_TUPLE:
-        print_typexpr(out, expr->left);
-        fputs(" * ", out);
-        print_typexpr(out, expr->right);
+    {
+        fputc('(', out);
+        // must always have two elems
+        TypeExprList* list = expr->type_list;
+        print_typexpr(out, list->type);
+        for (TypeExprList* l = list->next; l; l = l->next) {
+            fputs(" * ", out);
+            print_typexpr(out, l->type);
+        }
+        fputc(')', out);
         break;
+    }
     case TYPE_CONSTRUCTOR:
         fputc('(', out);
         print_typexpr(out, expr->param);
@@ -421,25 +656,33 @@ void print_params(FILE* out, const ParamList* params)
 
 void print_exprlist(FILE* out, const ExprList* list)
 {
-    fputc('(', out);
     const char* prefix = ""; // all but first get space prefix
     for (const ExprList* c = list; c; c = c->next) {
         fputs(prefix, out);
         print_expr(out, c->expr);
         prefix = " ";
     }
-    fputc(')', out);
+}
+
+void print_patternlist(FILE* out, const PatternList* list)
+{
+    const char* prefix = "";
+    for (const PatternList* l = list; l; l = l->next) {
+        fputs(prefix, out);
+        print_pattern(out, l->pattern);
+        prefix = " ";
+    }
 }
 
 void print_pattern(FILE* out, const Pattern* pat)
 {
-    fputs("(pattern ", out);
+    fputs("(p", out);
     switch (pat->tag) {
         case PAT_VAR:
-            fprintf(out, "%s", pat->name);
+            fprintf(out, "var %s", pat->name);
             break;
         case PAT_DISCARD:
-            fputc('_', out);
+            fputs("discard", out);
             break;
         case PAT_CONS:
         {
@@ -449,6 +692,25 @@ void print_pattern(FILE* out, const Pattern* pat)
             print_pattern(out, pat->right);
             break;
         }
+        case PAT_TUPLE:
+        {
+            fputs("tuple ", out);
+            print_patternlist(out, pat->pat_list);
+        }
+    }
+    fputc(')', out);
+}
+
+void print_cases(FILE* out, const CaseList* list)
+{
+    fputc('(', out);
+    const char* prefix = ""; // all but first get space prefix
+    for (const CaseList* c = list; c; c = c->next) {
+        fputs(prefix, out);
+        print_pattern(out, c->kase->pattern);
+        fputc(' ', out);
+        print_expr(out, c->kase->expr);
+        prefix = " ";
     }
     fputc(')', out);
 }
@@ -485,8 +747,12 @@ void print_expr(FILE* out, const Expr* expr)
     case STRVAL:
         fprintf(out, "string \"%s\"", expr->strval);
         break;
+    case RECFUNC_EXPR:
     case FUNC_EXPR:
-        fprintf(out, "func %s ", expr->func.name);
+        if (expr->tag == RECFUNC_EXPR)
+            fprintf(out, "recfunc %s ", expr->func.name);
+        else
+            fprintf(out, "func %s ", expr->func.name);
         if (expr->func.functype) {
             fputs(": ", out);
             print_typexpr(out, expr->func.functype);
@@ -526,6 +792,19 @@ void print_expr(FILE* out, const Expr* expr)
         fprintf(out, "tuple ");
         print_exprlist(out, expr->expr_list);
         break;
+    case EXTERN_EXPR:
+        fprintf(out, "external %s \"%s\" : ", expr->ext.name,
+                expr->ext.external_name);
+        print_typexpr(out, expr->ext.functype);
+        fputs(" 'in ", out);
+        print_expr(out, expr->func.subexpr);
+        break;
+    case MATCH_EXPR:
+        fprintf(out, "match ");
+        print_expr(out, expr->matchexpr);
+        fputc(' ', out);
+        print_cases(out, expr->cases);
+        break;
     }
     if (expr->type) {
         fprintf(out, " : ");
@@ -539,9 +818,14 @@ void print_declaration(FILE* out, const Declaration* decl)
 {
     fputc('(', out);
     switch (decl->tag) {
+    case DECL_RECFUNC:
     case DECL_FUNC:
-        fprintf(out, "func %s ", decl->func.name);
+        if (decl->tag == DECL_RECFUNC)
+            fprintf(out, "recfunc %s ", decl->func.name);
+        else
+            fprintf(out, "func %s ", decl->func.name);
         print_params(out, decl->func.params);
+        fputc(' ', out);
         print_expr(out, decl->func.body);
         break;
     case DECL_BIND:
@@ -553,6 +837,11 @@ void print_declaration(FILE* out, const Declaration* decl)
     case DECL_TYPE:
         fprintf(out, "type %s ", decl->type.name);
         print_typexpr(out, decl->type.definition);
+        break;
+    case DECL_EXTERN:
+        fprintf(out, "external %s \"%s\" : ", decl->ext.name,
+                decl->ext.external_name);
+        print_typexpr(out, decl->ext.type);
         break;
     }
     fputc(')', out);

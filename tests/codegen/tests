@@ -16,7 +16,9 @@ expect () {
 
 expect ./simple0 42
 expect ./simple1 3
-expect ./simple1.5 1
+if [[ ! "armv7l" == "$(uname -m)" ]]; then
+    expect ./simple1.5 1
+fi
 expect ./simple2 10
 expect ./simple4 11
 expect ./simple5 30
@@ -24,6 +26,86 @@ expect ./complex0 210
 expect ./lists0 3
 expect ./lists1 4
 expect ./lists2 3
+
+LD=ld
+LDFLAGS=
+LDLIBS=-lc
+if [[ $(uname) == "Darwin" ]]; then
+    LDFLAGS="$LDFLAGS -macosx_version_min $(sw_vers -productVersion)"
+fi
+
+expect2 () {
+    code="$1"
+    otmp=$(mktemp)
+    echo "$code" | ../../intml - | as -o $otmp --
+    ${LD} ${LDFLAGS} -o a.out $otmp ${LDLIBS}
+    ./a.out
+    result=$?
+    if [[ $result == $2 ]]; then
+        echo pass
+    else
+        echo "FAIL: '$1'"
+        echo "  expected: $2"
+        echo "  actual:   $result"
+        exitcode=$((1 + $exitcode))
+    fi
+    rm -f a.out $otmp
+}
+
+expect2 "
+let main () =
+  let snd xs =
+    let _ :: x :: _ = xs in x
+  in snd [ 4; 3; 2; 1 ]
+" 3
+
+expect2 "
+let sum =
+  let rec go acc xs =
+    let hd::tail = xs in
+    if hd then
+      go (hd + acc) tail
+    else
+      acc
+  in go 0
+let main () = sum [ 4; 3; 2; 1; 0; 0 ]
+" 10
+
+expect2 "let main () =
+  match 10 with
+  | y -> y * y
+" 100
+
+expect2 "let main () =
+match [1] with
+| x :: _ -> 51
+| _ -> 52
+" 51
+
+expect2 "let main () =
+match ([] : int list) with
+| x :: _ -> 51
+| _ -> 52
+" 52
+
+expect2 "let main () =
+match [1] with
+| _ :: x :: _ -> 50
+| x :: _ -> 51
+| _ -> 52
+" 51
+
+expect2 "
+let sum =
+  let rec go acc xs =
+    match xs with
+    | hd :: tail -> go (hd + acc) tail
+    | _ -> acc
+  in go 0
+let main () = sum [ 4; 3; 2; 1; 0 ]
+" 10
+
+
 
 # Exit with the number of failing tests
 exit $exitcode

@@ -1,8 +1,6 @@
 #!/bin/bash
 
 intml=../../intml
-# add a main function to make codegen happy
-end=" let main () = 0"
 red=$(tput setaf 1)
 green=$(tput setaf 2)
 reset=$(tput sgr0)
@@ -11,7 +9,7 @@ failures=0
 
 expect_fail() {
     code=$1
-    if (echo "$code$end" | $intml -t -o /dev/null - >/dev/null 2>&1); then
+    if (echo "$code" | $intml -t -o /dev/null - >/dev/null 2>&1); then
         echo "${red}fail:${reset} compiled without error: $code"
         failures=$(($failures + 1))
     else
@@ -20,7 +18,7 @@ expect_fail() {
 }
 expect_pass() {
     code=$1
-    if (echo "$code$end" | $intml -t -o /dev/null -); then
+    if (echo "$code" | $intml -t -o /dev/null -); then
         echo "${green}pass:${reset} compiled: $code"
     else
         echo "${red}fail:${reset} did not compile: $code"
@@ -71,6 +69,23 @@ expect_pass "let fincr f = let g () = 1 + f () in g"
 expect_pass "let eq a b = a = b  let x = eq 1 2"
 expect_fail 'let eq a b = a = b  let x = eq 1 "1"'
 
+# recursive functions
+expect_pass "let rec sum acc xs =
+  let x::tail = xs in
+  if x then sum (x+acc) tail
+  else acc
+let y = sum 0 [4;3;2;1;0]"
+
+expect_pass "
+let sum =
+  let rec go acc xs =
+    let x::tail = xs in
+    if x then go (x+acc) tail
+    else acc
+  in go 0
+let y = sum [4;3;2;1;0]"
+
+
 # Want to be able to infer the type of an earlier function from it's use
 # 10:int && infer 10 => x = 10 in infer x = x => x:int
 expect_pass "let infer x = x    let deduce = infer 10"
@@ -104,15 +119,48 @@ expect_pass "let x = ([| |] : string vector)"
 expect_fail "let x = [] = [||]"
 expect_fail "let x = [ 1 ] = [| 1 |]"
 
-#pattern matching
+# pattern matching
 expect_fail "let x :: y = []";
 expect_pass "let x :: y = [ 1 ]";
 expect_pass "let x :: y = [ 1 ; 2 ]";
 expect_pass "let head xs = let x::_ = xs in x  let y = head [1;2;3]"
+# should not be possible to mismatch structures. e.g. can't try to extract the
+# head of an int
+expect_fail "let x::_ = 1"
+# can discard anything...
+expect_pass "let _ = 1"
+expect_pass "let _ = [ 1 ]"
+expect_pass 'let _ = "1"'
+expect_pass 'let _ = [| 1 |]'
+# match expressions
+expect_pass "let x = match 1 with y -> y"
+expect_pass "let x = match [2] with y::_ -> y"
+expect_pass "let x = match [2] with y::_ -> y | _ -> 0"
+# cases must match in type
+expect_fail "let x = match 1 with _ -> 10 | _ -> [ 0 ]"
+expect_fail "let x = match 1 with _ -> 10 | _ -> 0 | _ -> [ 0 ]"
+
+# tuples
+expect_pass 'let x = 1, "hi", ()'
+expect_pass 'let f x y = (x, y)  let g = f 1 2'
+expect_pass "let x, y = 1, 2"
+expect_pass 'let x, y = 1, "hi"'
+expect_fail 'let x, y = 1, "hi"  let z = x + y'
+expect_fail "let x, x = 1, 2"
+
+expect_pass "let x = match 1, 2 with _ -> 10"
+expect_pass "let x = match 1, 2 with x,y -> x + y"
+expect_fail "let x = match 1 with x, y -> x + y"
+expect_pass "let f z = match z with x, y -> x + y  let w = f (1, 2)"
+expect_fail 'let f z = match z with x, y -> x + y  let w = f (1, "hey")'
 
 # type aliases
 expect_pass "type metre = int   let f (w:metre) (h:metre) = w * h / 2"
 expect_pass "type intfunc = int -> int  let apply (f:intfunc) x = f x"
+
+#externs
+expect_pass 'external f : int -> int = "example"  let y x = f x + x'
+expect_fail 'external f : string -> string = "example"  let y x = f x + x'
 
 if [[ $failures == 1 ]]; then
     echo 1 failure

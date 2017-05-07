@@ -26,9 +26,14 @@ static DeclarationList* tree = NULL;
     Expr*               expr;
     ExprList*           exprs;
     Pattern*            pattern;
+    PatternList*        patterns;
+    TPat*               tpat;
     ParamList*          params;
     Param*              param;
     TypeExpr*           typexpr;
+    TypeExprList*       types;
+    Case*               kase;
+    CaseList*           kases;
 
 /* terminals */
     int                 intval;     // we should probably store these
@@ -38,37 +43,41 @@ static DeclarationList* tree = NULL;
     const char*         error_msg;
 }
 
-%token LET TYPE IN IF THEN ELSE
-%token UNIT
+%token LET REC TYPE IN IF THEN ELSE MATCH WITH FUNCTION FUN
 %token <intval> INT
 %token <text>   STR_LIT
-%token <identifier> ID
+%token <identifier> ID TYPEID
 %token <error> ERROR
 %token EOFTOK
 
 %type <declarations> program declarations
-%type <declaration> declaration letdecl typedecl
+%type <declaration> declaration letdecl
 %type <pattern> pattern
+%type <tpat> tpattern
 %type <params> params
 %type <param> param
-%type <exprs> exprlist nonemptylist
+%type <exprs> exprlist nonemptylist tuplexpr
 %type <expr> expr letexpr exprterm
-%type <typexpr> typexpr typeterm
+%type <typexpr> typexpr typeterm optionaltype
+%type <types> typetuple
+%type <kases> matchings
+%type <kase> matching
 
-%nonassoc LET IN   /* These are to make let bindings stick to top level if poss */
+%nonassoc LET IN TYPE EXTERNAL MATCH WITH FUN FUNCTION
 %right ARROW    /* function typexprs */
 %nonassoc '[' ']' VSTART VEND
 %right ';'
 %nonassoc IF THEN ELSE
-%nonassoc ','
-%left '='       /* right in assignments but left in expressions */
+%left ',' /* not really, but makes list-building easier */
+%left '=' '|'   /* right in assignments but left in expressions */
 %nonassoc '<' LE
+%right '^' '@'
 %right CONS
 %left '+' '-'
 %left '*' '/'
-%left ID UNIT INT STR_LIT '('  /* function application -note, typecheck will
-                                  stop strings and ints being functions, rather
-                                  than the grammar */
+%left ID INT STR_LIT '('  /* function application -note, typecheck will
+                             stop strings and ints being functions, rather
+                             than the grammar */
 
 %%
 
@@ -82,17 +91,28 @@ declarations:
 /* we will add types to this*/
 declaration:
     letdecl                     { $$ = $1; }
-  | typedecl                    { $$ = $1; }
+  | TYPE ID '=' typexpr         { $$ = type($2, $4); }
+  | EXTERNAL ID ':' typexpr '=' STR_LIT
+    {
+      $$ = externdecl($2, $4, $6);
+    }
   ;
 letdecl:
     LET pattern '=' expr        { $$ = binding($2, $4); }
-  | LET ID params '=' expr      { $$ = func($2, reverse_params($3), $5); }
+  | LET ID params optionaltype '=' expr
+    { $$ = func_w_type($2, reverse_params($3), $4, $6); }
+  | LET REC ID params optionaltype '=' expr
+    { $$ = recfunc_w_type($3, reverse_params($4), $5, $7); }
   ;
 pattern:
-    ID                          { $$ = pat_var($1); }
-  | '(' pattern ')'             { $$ = $2; }
-  | '_'                         { $$ = pat_discard(); }
-  | pattern CONS pattern        { $$ = pat_list($1, $3); }
+    tpattern                    { $$ = tpat_to_pat($1); }
+  ;
+tpattern:
+    ID                          { $$ = tpat_var($1); }
+  | '(' pattern ')'             { $$ = tpat_pattern($2); }
+  | '_'                         { $$ = tpat_discard(); }
+  | tpattern CONS tpattern      { $$ = tpat_cons($1, $3); }
+  | tpattern ',' tpattern       { $$ = tpat_tuple($1, $3); }
   ;
 params:
     params param                { $$ = add_param($1, $2); }
@@ -101,7 +121,7 @@ params:
 param:
     ID                          { $$ = param($1); }
   | '(' ID ':' typexpr ')'      { $$ = param_with_type($2, $4); }
-  | UNIT                        { $$ = param(symbol("()")); }
+  | '(' ')'                     { $$ = param(symbol("()")); }
   ;
 expr:
     letexpr                     { $$ = $1; }
@@ -118,6 +138,12 @@ expr:
     /* but we need to disambiguate */
   | expr exprterm               { $$ = apply($1, $2); }
   | exprterm                    { $$ = $1; }
+  | MATCH expr WITH matchings   { $$ = match($2, reverse_cases($4)); }
+  | tuplexpr %prec ';'          { $$ = tuple(reverse_list($1)); }
+  ;
+tuplexpr:
+    expr ',' expr               { $$ = add_expr(add_expr(exprlist(), $1), $3); }
+  | tuplexpr ',' expr           { $$ = add_expr($1, $3); }
   ;
 exprterm:
     '(' expr ')'                { $$ = $2; }
@@ -125,19 +151,27 @@ exprterm:
   | '[' exprlist ']'            { $$ = list($2); }
   | VSTART exprlist VEND        { $$ = vector($2); }
   | ID                          { $$ = var($1); }
-  | UNIT                        { $$ = unit_expr(); }
+  | '(' ')'                     { $$ = unit_expr(); }
   | INT                         { $$ = intval($1); }
   | STR_LIT                     { $$ = strval($1); }
   ;
 letexpr:
-    LET ID params '=' expr IN expr
+    LET ID params optionaltype '=' expr IN expr
     {
-      $$ = local_func($2, reverse_params($3), $5, $7);
+      $$ = local_func_w_type($2, reverse_params($3), $4, $6, $8);
+    }
+  | LET REC ID params optionaltype '=' expr IN expr
+    {
+      $$ = local_recfunc_w_type($3, reverse_params($4), $5, $7, $9);
     }
   | LET pattern '=' expr IN expr
     {
       $$ = local_binding($2, $4, $6);
     }
+  ;
+optionaltype:
+    /* empty */     { $$ = NULL; /* will become type constraint in TC*/ }
+  | ':' typexpr     { $$ = $2; }
   ;
 exprlist:
     /* empty */             { $$ = exprlist(); }
@@ -147,20 +181,28 @@ nonemptylist:
     expr                    { $$ = add_expr(exprlist(), $1); }
   | expr ';' nonemptylist   { $$ = add_expr($3, $1); }
   ;
-typedecl:
-    TYPE ID '=' typexpr     { $$ = type($2, $4); }
+matchings:
+    matchings '|' matching      { $$ = case_add($1, $3); }
+  | '|' matching                { $$ = caselist($2); } /* optional first | */
+  | matching                    { $$ = caselist($1); }
+  ;
+matching:
+    pattern ARROW expr          { $$ = matchcase($1, $3); }
   ;
 typexpr:
-    /* should be typexpr -> typexpr  but use terminals on right to
-     * clear up ambiguities in the grammar
-     */
-    typeterm ARROW typexpr  { $$ = typearrow($1, $3); }
-  | typexpr '*' typeterm    { $$ = typetuple($1, $3);  }
-  | typexpr ID              { $$ = typeconstructor($1, $2); }
-  | typeterm                { $$ = $1; }
+    typexpr ARROW typexpr       { $$ = typearrow($1, $3); }
+  | typetuple                   { $$ = typetuple(reversed_types($1));  }
+  | typeterm                    { $$ = $1; }
+  ;
 typeterm:
-    '(' typexpr ')'         { $$ = $2; }
-  | ID                      { $$ = typename($1); }
+    '(' typexpr ')'             { $$ = $2; }
+  | typeterm ID                 { $$ = typeconstructor($1, $2); }
+  | ID                          { $$ = typename($1); }
+  ;
+typetuple:
+    /* these need to be a list as (1,2,3) != ((1,2),3) and != (1,(2,3))   */
+    typeterm '*' typeterm       { $$ = type_add(type_list($1), $3); }
+  | typetuple '*' typeterm      { $$ = type_add($1, $3); }
   ;
 %%
 

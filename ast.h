@@ -4,35 +4,38 @@
 #include "symbols.h"
 #include <stdio.h> // FILE*
 
-// Pre-declare our struct types to allow recursive tree
-struct DeclarationList;
-struct Declaration;
-struct Func;
-struct Binding;
-struct Type;
-struct ParamList;
-struct Param;
-struct Pattern;
-struct Expr;
-struct FuncExpr;
-struct BindExpr;
-struct ExprList;
-struct TypeExpr;
+#define DECLARE_STRUCT(name)  struct name; typedef struct name name
 
-// typedef everything to make it all nicer to read and type
-typedef struct DeclarationList DeclarationList;
-typedef struct Declaration Declaration;
-typedef struct Func Func;
-typedef struct Binding Binding;
-typedef struct Type Type;
-typedef struct ParamList ParamList;
-typedef struct Param Param;
-typedef struct Pattern Pattern;
-typedef struct Expr Expr;
-typedef struct FuncExpr FuncExpr;
-typedef struct BindExpr BindExpr;
-typedef struct ExprList ExprList;
-typedef const struct TypeExpr TypeExpr; // can use "struct TypeExpr" for mutable version in constructors
+// Pre-declare our struct types to allow recursive tree
+DECLARE_STRUCT( DeclarationList );
+DECLARE_STRUCT( Declaration     );
+DECLARE_STRUCT( Func            );
+DECLARE_STRUCT( Binding         );
+DECLARE_STRUCT( Type            );
+DECLARE_STRUCT( External        );
+DECLARE_STRUCT( ParamList       );
+DECLARE_STRUCT( Param           );
+DECLARE_STRUCT( Pattern         );
+DECLARE_STRUCT( PatternList     );
+DECLARE_STRUCT( TPat            );
+DECLARE_STRUCT( Expr            );
+DECLARE_STRUCT( FuncExpr        );
+DECLARE_STRUCT( BindExpr        );
+DECLARE_STRUCT( ExternExpr      );
+DECLARE_STRUCT( ExprList        );
+DECLARE_STRUCT( Case            );
+DECLARE_STRUCT( CaseList        );
+
+/*
+ * Declare types so that they are immutable as this has some nice properties
+ * We may do some interning of these at some point
+ */
+struct TypeExpr;
+struct TypeExprList;
+typedef const struct TypeExpr TypeExpr; /* can use "struct TypeExpr" for
+                                           mutable version in the constructor */
+typedef const struct TypeExprList TypeExprList;
+
 
 /* define our tree */
 
@@ -44,6 +47,7 @@ struct DeclarationList {
 struct Func {
     Symbol name;
     ParamList* params;
+    TypeExpr* resulttype;
     Expr* body;
 
     TypeExpr* type;
@@ -61,16 +65,25 @@ struct Type {
     TypeExpr* definition;
 };
 
+struct External {
+    Symbol name;
+    TypeExpr* type;
+    Symbol external_name;
+};
+
 struct Declaration {
     enum DeclTag {
         DECL_FUNC = 1,
         DECL_BIND,
-        DECL_TYPE
+        DECL_TYPE,
+        DECL_EXTERN,
+        DECL_RECFUNC,
     }               tag;
     union {
         Func        func;
         Binding     binding;
         Type        type;
+        External    ext;
     };
 };
 
@@ -93,6 +106,7 @@ struct Param {
 struct FuncExpr {
     Symbol name;
     ParamList* params;
+    TypeExpr* resulttype;
     Expr* body;
     Expr* subexpr;
 
@@ -111,6 +125,15 @@ struct BindExpr {
     Expr* subexpr;
 };
 
+struct ExternExpr {
+    Symbol name;
+    TypeExpr* functype;
+    Symbol external_name;
+    Expr* subexpr;
+
+    int var_id;
+};
+
 struct Expr {
     enum ExprTag {
         PLUS = 1,
@@ -126,11 +149,14 @@ struct Expr {
         INTVAL,
         STRVAL,
         FUNC_EXPR,
+        RECFUNC_EXPR,
         BIND_EXPR,
         IF_EXPR,
         LIST,
         VECTOR,
         TUPLE,
+        EXTERN_EXPR, /* not in the language - just for codegen */
+        MATCH_EXPR,
     }               tag;
     union {
         struct { /* PLUS - APPLY */
@@ -144,14 +170,19 @@ struct Expr {
         };
         int         intval;     /* INTVAL */
         Symbol      strval;     /* STRVAL */
-        FuncExpr    func;       /* FUNC_EXPR */
+        FuncExpr    func;       /* FUNC_EXPR, RECFUNC_EXPR */
         BindExpr    binding;    /* BIND_EXPR */
         struct { /* IF_EXPR */
             Expr*   condition;
             Expr*   btrue;      // true branch
             Expr*   bfalse;     // false branch
         };
-        ExprList* expr_list; /* LIST, VECTOR, TUPLE */
+        ExprList*   expr_list; /* LIST, VECTOR, TUPLE */
+        ExternExpr  ext;        /* EXTERN_EXPR */
+        struct { /* MATCH_EXPR */
+            Expr* matchexpr;
+            CaseList* cases;
+        };
     };
     /* We will want to be able to type all our expressions */
     TypeExpr*       type;
@@ -171,17 +202,41 @@ struct TypeExpr {
         TYPE_CONSTRUCTOR,
     } tag;
     union {
-        Symbol name;
-        struct { /* typearrow */
+        Symbol name;                /* TYPE_NAME */
+        struct {                    /* TYPE_ARROW */
             TypeExpr* left;
             TypeExpr* right;
         };
-        int constraint_id;
-        // perhaps tuple should be a list of types...
-        struct {
+        int constraint_id;          /* TYPE_CONSTRAINT */
+        TypeExprList* type_list;    /* TYPE_TUPLE */
+        struct {                    /* TYPE_CONSTRUCTOR */
             TypeExpr* param;
             Symbol constructor;
         };
+    };
+};
+
+struct TypeExprList {
+    TypeExpr* type;
+    TypeExprList* next;
+};
+
+/* */
+struct TPat {
+    enum TPatTag {
+        TPAT_VAR = 1,
+        TPAT_DISCARD,
+        TPAT_CONS,
+        TPAT_TUPLE,
+        TPAT_PATTERN,
+    } tag;
+    union {
+        Symbol name; /* TPAT_VAR */
+        struct {
+            TPat* left;  /* TPAT_CONS, TPAT_TUPLE */
+            TPat* right;
+        };
+        Pattern* pattern; /* TPAT_PATTERN*/
     };
 };
 
@@ -190,6 +245,7 @@ struct Pattern {
         PAT_VAR = 1,
         PAT_DISCARD,
         PAT_CONS,
+        PAT_TUPLE,
     } tag;
     union {
         struct {
@@ -197,11 +253,27 @@ struct Pattern {
             int var_id; // used for tagging in codgen
         };
         struct {
-            Pattern* left;  /* CONS */
+            Pattern* left;  /* PAT_CONS */
             Pattern* right;
         };
+        PatternList* pat_list;  /* PAT_TUPLE*/
     };
     TypeExpr* type;
+};
+
+struct PatternList {
+    Pattern* pattern;
+    PatternList* next;
+};
+
+struct Case {
+    Pattern* pattern;
+    Expr* expr;
+};
+
+struct CaseList {
+    Case* kase;
+    CaseList* next;
 };
 
 /*
@@ -220,6 +292,11 @@ void print_declaration(FILE* out, const Declaration* decl);
  * Print a type expression tree
  */
 void print_typexpr(FILE*, TypeExpr*);
+
+/*
+ * Print a pattern expression
+ */
+void print_pattern(FILE* out, const Pattern* pat);
 
 /*
  * Write our own printf just to make printing types a bit easier
@@ -246,7 +323,7 @@ DeclarationList* declaration_list(Declaration* node);
 DeclarationList* add_declaration(DeclarationList* list, Declaration* node);
 
 /*
- * Returns a reverse declaration list
+ * Returns a reverse declaration list. *Mutates the list*
  */
 DeclarationList* reverse_declarations(DeclarationList* list);
 
@@ -256,14 +333,31 @@ DeclarationList* reverse_declarations(DeclarationList* list);
 Declaration* func(Symbol name, ParamList* params, Expr* body);
 
 /*
+ * Create a global function with an explicit type specified in the program
+ */
+Declaration* func_w_type(
+        Symbol name, ParamList* params, TypeExpr* type, Expr* body);
+
+/*
+ * Create a recursive function which can refer to it's name within its body
+ */
+Declaration* recfunc_w_type(
+        Symbol name, ParamList* params, TypeExpr* type, Expr* body);
+
+/*
  * Create a global binding node
  */
 Declaration* binding(Pattern* pattern, Expr* init);
 
 /*
- * Creates a type declaration node
+ * Create a type declaration node
  */
 Declaration* type(Symbol name, TypeExpr* definition);
+
+/*
+ * Create an external declaration node
+ */
+Declaration* externdecl(Symbol name, TypeExpr* type, Symbol external_name);
 
 /*
  * Construct a param node from a symbol
@@ -286,7 +380,7 @@ ParamList* add_param(ParamList* list, Param* param);
 ParamList* param_list(Param* param);
 
 /*
- * Returns a reversed param list
+ * Returns a reversed param list. *Mutates the list*
  */
 ParamList* reverse_params(ParamList* list);
 
@@ -334,6 +428,21 @@ Expr* strval(Symbol text);
  */
 Expr* local_func(Symbol name, ParamList* params, Expr* body, Expr* subexpr);
 
+Expr* local_func_w_type(
+        Symbol name, ParamList* params, TypeExpr* resulttype,
+        Expr* body, Expr* subexpr);
+
+/*
+ * Creates a recursive function node, where-by the body can refer to the
+ * function name
+ */
+Expr* local_recfunc(Symbol name, ParamList* params, Expr* body, Expr* subexpr);
+
+Expr* local_recfunc_w_type(
+        Symbol name, ParamList* params, TypeExpr* resulttype, Expr* body,
+        Expr* subexpr);
+
+
 /*
  * Creates a local variable binding and subexpression node which uses
  * the binding
@@ -359,6 +468,17 @@ Expr* vector(ExprList* exprs);
  * Creates a tuple expression
  */
 Expr* tuple(ExprList* exprs);
+
+/*
+ * Only used by codegen in rewriting
+ */
+Expr* local_extern(
+        Symbol name, TypeExpr* type, Symbol external_name, Expr* subexpr);
+
+/*
+ * Creates a match expression node
+ */
+Expr* match(Expr* matchexpr, CaseList* cases);
 
 /*
  * Creates an empty list of expressions (used in compund expressions like lists 
@@ -397,7 +517,7 @@ TypeExpr* typeconstraint(int constraint_id);
 /*
  * Creates a type tuple
  */
-TypeExpr* typetuple(TypeExpr* left, TypeExpr* right);
+TypeExpr* typetuple(TypeExprList* type);
 
 /*
  * Creates a constructed type where constrname is a type constructor
@@ -406,13 +526,83 @@ TypeExpr* typetuple(TypeExpr* left, TypeExpr* right);
 TypeExpr* typeconstructor(TypeExpr* param, Symbol constrname);
 
 /*
+ * A new list with a type within, head
+ */
+TypeExprList* type_list(TypeExpr* head);
+
+/*
+ * Cons newhead onto the head of the list
+ */
+TypeExprList* type_add(TypeExprList* list, TypeExpr* newhead);
+
+/*
+ * Returns a new reversed list. Does not mutate the given list
+ */
+TypeExprList* reversed_types(TypeExprList* list);
+
+/*
  * Create a value-name pattern
  */
 Pattern* pat_var(Symbol name);
 
+/*
+ * A pattern which discards the expresion it's matched against
+ */
 Pattern* pat_discard();
 
-Pattern* pat_list(Pattern* head, Pattern* tail);
+/*
+ * A pattern that matches the head and the tail of a list
+ */
+Pattern* pat_cons(Pattern* head, Pattern* tail);
 
+/*
+ *
+ */
+Pattern* pat_tuple(PatternList* list);
+
+/*
+ * A non-empty list.
+ */
+PatternList* pat_nel(Pattern* head);
+
+/*
+ * Returns a new list with newhead as the head and list as the tail
+ */
+PatternList* add_pat(PatternList* list, Pattern* newhead);
+
+/*
+ * Temporary pattern type that doesn't contain lists so that
+ * we can get tuple grammar to work with the fact that parens create sub-tuples
+ */
+TPat* tpat_var(Symbol name);
+TPat* tpat_discard();
+TPat* tpat_cons(TPat* head, TPat* tail);
+TPat* tpat_tuple(TPat* first, TPat* rest);
+TPat* tpat_pattern(Pattern* pattern);
+
+/*
+ * Convert from a TPat to a Pattern
+ */
+Pattern* tpat_to_pat(TPat* tpat);
+
+/*
+ * A case node for a match or function expression
+ */
+Case* matchcase(Pattern* pattern, Expr* expr);
+
+/*
+ * Create a case list with just one node (head)
+ */
+CaseList* caselist(Case* head);
+
+/*
+ *
+ */
+CaseList* case_add(CaseList* list, Case* kase);
+
+/*
+ * Reverses the list and returns the new head *Mutates the list*
+ */
+CaseList* reverse_cases(CaseList* list);
 
 #endif // __AST_H__
