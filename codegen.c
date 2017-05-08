@@ -288,15 +288,23 @@ typedef const char* reg;
     static reg t1 = "%r11";
     static reg sp = "%rsp";
     static reg bp = "%rbp";
+    static reg cs0 = "%r12";
+    static reg cs1 = "%r13";
+    static reg cs2 = "%r14";
+    static reg cs3 = "%r15";
 #elif defined(__arm__)
     static reg r0 = "r0";
     static reg r1 = "r1"; // first argument or second word of return
     static reg r2 = "r2";
     static reg r3 = "r3";
-    static reg t0 = "r4"; // we are saving these on stack in our fn prologue
-    static reg t1 = "r5";
+    static reg t0 = "ip";
+    static reg t1 = "r4"; // we are saving this on stack in our fn prologue
     static reg sp = "sp";
     static reg bp = "fp";
+    static reg cs0 = "r5"; // callee-saved
+    static reg cs1 = "r6";
+    static reg cs2 = "r7";
+    static reg cs3 = "r8";
 #endif
 
 static inline void ins2(const char* instr, const char* lop, const char* rop)
@@ -655,8 +663,8 @@ static void emit_fn_prologue(Function* func)
 #else
     fputs("\
 	mov	ip, sp\n\
-	push	{fp, ip, lr, pc}\n\
-	push	{r4-r11}\n\
+	push	{fp, ip, lr}\n\
+	push	{r4-r10}\n\
 ", cgenout);
     sub_imm(sp, stack_required(func));
 #endif
@@ -679,7 +687,7 @@ static void emit_fn_epilogue(Function* func)
 ", cgenout);
 #else
     add_imm(sp, stack_required(func));
-    fputs("	pop {r4-r11}\n", cgenout);
+    fputs("	pop	{r4-r10}\n", cgenout);
     fputs("	ldm	sp, {fp, sp, pc}\n", cgenout);
 #endif
 }
@@ -897,7 +905,8 @@ static void gen_stack_machine_code(Expr* expr)
             break;
         case MULTIPLY:
             gen_sm_binop(expr);
-            mul(r0, r0, t0); // r0 = r0 * t0
+            // arm says Rd and Rm should be different in mul
+            mul(r0, t0, r0); // r0 = t0 * 00
             break;
         case MINUS:
             gen_sm_binop_r(expr);
@@ -1075,9 +1084,9 @@ static void gen_stack_machine_code(Expr* expr)
                 // Reduce stack usage, use callee-saved %r12
                 alloc(closure_size(func));  // Address in r0
                 store(-varx.stack_offset - WORD_SIZE, bp, r0); // Save Address
-                push("%r12");
-                push("%r13"); // Just do this one for alignment
-                mov("%r12", r0); // But also put somewhere useful too
+                push(cs0);
+                push(cs1); // Just do this one for alignment on x86
+                mov(cs0, r0); // But also put somewhere useful too
 
                 int offset = 0;
                 for (ParamList* c = func->closure; c; c = c->next) {
@@ -1093,14 +1102,14 @@ static void gen_stack_machine_code(Expr* expr)
                     gen_stack_machine_code(varnode); // Load value into r0,r1
                     free(varnode);
                     // Store
-                    store(offset, "%r12", r0);
+                    store(offset, cs0, r0);
                     if (stack_size_of_type(c->param->type) > WORD_SIZE) {
-                        store(offset + WORD_SIZE, "%r12", r1);
+                        store(offset + WORD_SIZE, cs0, r1);
                     }
                     offset += stack_size_of_type(c->param->type);
                 }
-                pop("%r13");
-                pop("%r12"); // restore r12 as per contract
+                pop(cs1);
+                pop(cs0); // restore cs0 as per contract
             }
 
             gen_stack_machine_code(expr->func.subexpr);
@@ -1340,8 +1349,9 @@ _start:\n\
 .text\n\
 .global _start\n\
 _start:\n\
-	bl  	start__0	@ will leave exit code in r0\n\
-    mov		r7, #1\n\
+	mov		fp, sp		@ initialize frame pointer\n\
+	bl		start__0	@ will leave exit code in r0\n\
+	mov		r7, #1\n\
 	swi		0\n\
 \n\
 ", cgenout);
