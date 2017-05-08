@@ -297,8 +297,8 @@ typedef const char* reg;
     static reg r1 = "r1"; // first argument or second word of return
     static reg r2 = "r2";
     static reg r3 = "r3";
-    static reg t0 = "ip";
-    static reg t1 = "r4"; // we are saving this on stack in our fn prologue
+    static reg t0 = "r4"; // we are saving this on stack in our fn prologue
+    static reg t1 = "ip";
     static reg sp = "sp";
     static reg bp = "fp";
     static reg cs0 = "r5"; // callee-saved
@@ -442,6 +442,7 @@ static void mov(reg dst, reg src)
         ins2("mov", dst, src);
     #endif
 }
+
 static void pop(reg dst)
 {
     #ifdef __x86_64__
@@ -450,7 +451,25 @@ static void pop(reg dst)
         fprintf(cgenout, "\tpop\t{%s}\n", dst);
     #endif
 }
+static void pop2(reg dst0, reg dst1)
+{
+    #ifdef __x86_64__
+        pop(dst0); pop(dst1);
+    #else
+        fprintf(cgenout, "\tpop\t{%s,%s}\n", dst0, dst1);
+    #endif
+}
+static void pop4(reg dst0, reg dst1, reg dst2, reg dst3)
+{
+    #ifdef __x86_64__
+        pop(dst0); pop(dst1); pop(dst2); pop(dst3);
+    #else
+        fprintf(cgenout, "\tpop\t{%s,%s,%s,%s}\n", dst0, dst1, dst2, dst3);
+    #endif
+}
+
 static void popd() /* Discard item on stack*/ { add_imm(sp, WORD_SIZE); }
+
 static void push(reg op0)
 {
     #ifdef __x86_64__
@@ -459,8 +478,27 @@ static void push(reg op0)
         fprintf(cgenout, "\tpush\t{%s}\n", op0);
     #endif
 }
+/* equivalent to push(op1) and then push(op0) */
+static void push2(reg op0, reg op1)
+{
+    #ifdef __x86_64__
+        push(op1); push(op0);
+    #else
+        fprintf(cgenout, "\tpush\t{%s,%s}\n", op0, op1);
+    #endif
+}
+/* equivalent to push(op3)...push(op0) */
+static void push4(reg op0, reg op1, reg op2, reg op3)
+{
+    #ifdef __x86_64__
+        push(op3); push(op2); push(op1); push(op0);
+    #else
+        fprintf(cgenout, "\tpush\t{%s,%s,%s,%s}\n", op0, op1, op2, op3);
+    #endif
+}
 
 static void pushd() /* used to align the stack */ { sub_imm(sp, WORD_SIZE); }
+
 static void cmp(reg left, reg right)
 {
     #ifdef __x86_64__
@@ -469,6 +507,7 @@ static void cmp(reg left, reg right)
         ins2("cmp", left, right); // do these
     #endif
 }
+
 static void cmp_imm(reg left, long long imm)
 {
 
@@ -647,27 +686,29 @@ static char* function_label(Function* func)
 // this will need a definition of local vars
 static void emit_fn_prologue(Function* func)
 {
-#ifdef __x86_64__
-    // align function start to 2^4=16 byte boundary
-    fprintf(cgenout, ".p2align 4, 0x90\n");
-#endif
     char* lbl = function_label(func);
+    #ifdef __x86_64__
+        // align function start to 2^4=16 byte boundary
+        fprintf(cgenout, ".p2align	4, 0x90\n");
+    #else
+        fprintf(cgenout, ".global	%s\n", lbl);
+        fprintf(cgenout, ".p2align	2\n");
+        fprintf(cgenout, ".type	%s,%%function\n", lbl);
+    #endif
     fprintf(cgenout, "%s:\n", lbl);
     free(lbl);
-#ifdef __x86_64__
-    fputs("\
-	pushq	%rbp\n\
-	movq	%rsp, %rbp\n\
-", cgenout);
-    fprintf(cgenout, "\tsubq\t$%d, %s\n", stack_required(func), sp);
-#else
-    fputs("\
-	mov	ip, sp\n\
-	push	{fp, ip, lr}\n\
-	push	{r4-r10}\n\
-", cgenout);
+    #ifdef __x86_64__
+        fputs("\tpushq	%rbp\n", cgenout);
+        fputs("\tmovq	%rsp, %rbp\n", cgenout);
+    #else
+        fputs("\t.fnstart\n", cgenout);
+        fputs("\t.save	{r4, fp, lr}\n", cgenout);
+        fputs("\tpush	{r4, fp, lr}\n", cgenout);
+        fputs("\t.setfp	fp, sp\n", cgenout);
+        fputs("\tmov	fp, sp\n", cgenout);
+        fprintf(cgenout, "\t.pad	#%d\n", stack_required(func));
+    #endif
     sub_imm(sp, stack_required(func));
-#endif
     // Move ptr to closure into stack location
     store(closure_offset(func), bp, r1);
     if (stack_size_of_type(func->type->left) > 0) {
@@ -677,6 +718,7 @@ static void emit_fn_prologue(Function* func)
         }
     }
 }
+
 static void emit_fn_epilogue(Function* func)
 {
 #ifdef __x86_64__
@@ -686,9 +728,13 @@ static void emit_fn_epilogue(Function* func)
 	retq\n\
 ", cgenout);
 #else
-    add_imm(sp, stack_required(func));
-    fputs("	pop	{r4-r10}\n", cgenout);
-    fputs("	ldm	sp, {fp, sp, pc}\n", cgenout);
+    fputs("\tmov sp, fp\n", cgenout);
+    fputs("\tpop	{r4, fp, pc}\n", cgenout);
+    char* lbl = function_label(func);
+    fprintf(cgenout, "\t.size	%s, .-%s\n", lbl, lbl);
+    fprintf(cgenout, "\t.cantunwind\n");
+    fprintf(cgenout, "\t.fnend\n");
+    free(lbl);
 #endif
 }
 
@@ -740,30 +786,28 @@ static void gen_list_from_end(ExprList* list, int node_size)
         if (node_size >= 3 * WORD_SIZE) mov(r2, r1);
         mov(r1, r0); // data goes into word 2
         popd();  // return stack pointer to point at our prev r0
-        //pop(r0); // the address of the tail.
+        pop(r0); // the address of the tail.
 
         // Save the generated value on the stack...
-        //push(r0);
-        push(r1);
         if (node_size >= 3 * WORD_SIZE) {
-            push(r2);
-            push(r3);
+            push4(r0, r1, r2, r3);
+        } else {
+            push2(r0, r1);
         }
         // allocate memory to save the data
         alloc(node_size); // == 2 * WORD_SIZE atm
 
+        pop2(t0, t1);
+        // copy the data to memory
+        store(0, r0, t0);
+        store(WORD_SIZE, r0, t1);
+
         if (node_size >= 3 * WORD_SIZE) {
-            pop(t1);
-            pop(t0);
+            pop2(t0, t1);
             store(2 * WORD_SIZE, r0, t0);
             if (node_size >= 4 * WORD_SIZE)
                 store(3 * WORD_SIZE, r0, t1);
         }
-        pop(t1);
-        pop(t0);
-        // copy the data to memory
-        store(0, r0, t0);
-        store(WORD_SIZE, r0, t1);
         // r0 is left as the pointer to list node
     } else {
         mov_imm(r0, 0LL); // nil
@@ -810,6 +854,7 @@ static void gen_sm_unapply_pat(Pattern* pat)
 
         // Load head data
         mov(t0, r0);
+        // TODO: convert these into single arm instruction-like fn abstractions
         switch (WORD_SIZE + stack_size_of_type(pat->left->type)) {
           case 3 * WORD_SIZE:   loadc(r1, t0, 2*WORD_SIZE,  "w2 into r1");
           case 2 * WORD_SIZE:   loadc(r0, t0, WORD_SIZE,    "w1 into r0");
@@ -844,7 +889,7 @@ static void gen_sm_unapply_pat(Pattern* pat)
         // We can assume that we have the same type as the init value,
         // including number of items in the tuple
         assert(stack_size_of_type(pat->type) <= 4 * WORD_SIZE);
-        reg rs[4] = { "%r12", "%r13", "%r14", "%r15" };
+        reg rs[4] = { cs0, cs1, cs2, cs3 };
         reg drs[4] = { r0, r1, r2, r3 };
         const int word_size_ctz = __builtin_ctz(WORD_SIZE);
         int stack_size = stack_size_of_type(pat->type);
@@ -876,20 +921,16 @@ static void gen_sm_unapply_pat(Pattern* pat)
 static void gen_sm_binop(Expr* expr)
 {
     gen_stack_machine_code(expr->left);     // left expression into r0
-    push(r0);                               // save r0
-    push(r1);
+    push2(r0, r1);                          // save r0
     gen_stack_machine_code(expr->right);    // right expression into r0
-    pop(t1);
-    pop(t0);                                // left expr into t0
+    pop2(t0, t1);                            // left expr into t0
 }
 static void gen_sm_binop_r(Expr* expr)
 {
     gen_stack_machine_code(expr->right);    // right expression into r0
-    push(r0);                               // save r0
-    push(r1);
+    push2(r0, r1);                           // save r0
     gen_stack_machine_code(expr->left);     // left expression into r0
-    pop(r1);
-    pop(t0);                                // right expr into t0
+    pop2(t0, r1);                            // right expr into t0
 }
 static void gen_stack_machine_code(Expr* expr)
 {
@@ -942,8 +983,7 @@ static void gen_stack_machine_code(Expr* expr)
         case APPLY:
         {
             gen_stack_machine_code(expr->left);     // left expression into r0+
-            push(r0);
-            push(r1);
+            push2(r0, r1);
             gen_stack_machine_code(expr->right);    // right expression into r0
 
             // and r0 contains first word of arg (even if arg is () )
@@ -952,8 +992,7 @@ static void gen_stack_machine_code(Expr* expr)
             if (stack_size_of_type(expr->right->type) > WORD_SIZE) {
                 mov(r3, r1); // move into argument 3
             }
-            pop(r1); // pop closure ptr of function object is always first param
-            pop(r0);
+            pop2(r0, r1); // pop closure ptr of function object is always first param
             call_reg(r0); // Emit a callq *rax kinda thing
             // if sizeof(result->type) == WORD_SIZE
             // then %rax
@@ -1084,8 +1123,7 @@ static void gen_stack_machine_code(Expr* expr)
                 // Reduce stack usage, use callee-saved %r12
                 alloc(closure_size(func));  // Address in r0
                 store(-varx.stack_offset - WORD_SIZE, bp, r0); // Save Address
-                push(cs0);
-                push(cs1); // Just do this one for alignment on x86
+                push2(cs0, cs1);
                 mov(cs0, r0); // But also put somewhere useful too
 
                 int offset = 0;
@@ -1108,8 +1146,7 @@ static void gen_stack_machine_code(Expr* expr)
                     }
                     offset += stack_size_of_type(c->param->type);
                 }
-                pop(cs1);
-                pop(cs0); // restore cs0 as per contract
+                pop2(cs0, cs1); // restore cs0 as per contract
             }
 
             gen_stack_machine_code(expr->func.subexpr);
@@ -1260,15 +1297,14 @@ static void gen_stack_machine_code(Expr* expr)
             assert(stack_size_of_type(expr->matchexpr->type) <= 3 * WORD_SIZE);
             // Save expression value somewhere safe
             if (match_type_size > 2 * WORD_SIZE) {
-                push("%r15");
-                push("%r14");
+                push4(cs0, cs1, cs2, cs3);
+            } else {
+                push2(cs0, cs1);
             }
-            push("%r13");
-            push("%r12");
             switch (match_type_size) {
-              case 3 * WORD_SIZE: mov("%r14", r2);
-              case 2 * WORD_SIZE: mov("%r13", r1);
-              case 1 * WORD_SIZE: mov("%r12", r0);
+              case 3 * WORD_SIZE: mov(cs2, r2);
+              case 2 * WORD_SIZE: mov(cs1, r1);
+              case 1 * WORD_SIZE: mov(cs0, r0);
                                   break;
               default:
                 assert(0 && "TODO: handle larger sizes");
@@ -1278,9 +1314,9 @@ static void gen_stack_machine_code(Expr* expr)
                 if (k != expr->cases) {
                     // Restore the value of the matchexpr
                     switch (match_type_size) {
-                      case 3 * WORD_SIZE: mov(r0, "%r14");
-                      case 2 * WORD_SIZE: mov(r1, "%r13");
-                      case 1 * WORD_SIZE: mov(r0, "%r12");
+                      case 3 * WORD_SIZE: mov(r2, cs2);
+                      case 2 * WORD_SIZE: mov(r1, cs1);
+                      case 1 * WORD_SIZE: mov(r0, cs0);
                                           break;
                       default:
                         assert(0 && "TODO: handle larger sizes");
@@ -1303,11 +1339,10 @@ static void gen_stack_machine_code(Expr* expr)
 
             label(end_of_match);
             // Restore scratched registers
-            pop("%r12");
-            pop("%r13");
             if (match_type_size > 2 * WORD_SIZE) {
-                pop("%r14");
-                pop("%r15");
+                pop2(cs0, cs1);
+            } else {
+                pop4(cs0, cs1, cs2, cs3);
             }
             break;
         }
