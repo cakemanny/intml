@@ -1340,9 +1340,9 @@ static void gen_stack_machine_code(Expr* expr)
             label(end_of_match);
             // Restore scratched registers
             if (match_type_size > 2 * WORD_SIZE) {
-                pop2(cs0, cs1);
-            } else {
                 pop4(cs0, cs1, cs2, cs3);
+            } else {
+                pop2(cs0, cs1);
             }
             break;
         }
