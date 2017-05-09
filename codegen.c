@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include "platform.h"
 
 /*
    Think how we would compile the following programs
@@ -87,6 +88,9 @@ FILE* cgenout = NULL;
  * temp file where data segment is written until it is appended to the end
  */
 FILE* dataout = NULL;
+#ifdef _WIN32
+char dataoutname[L_tmpnam];
+#endif
 
 typedef struct Function {
     Symbol name;
@@ -1078,7 +1082,7 @@ static void gen_stack_machine_code(Expr* expr)
             int llen = request_label();
             fprintf(dataout, ".p2align 3\n");
             fprintf(dataout, "L%d:\n", llen);
-            fprintf(dataout, "\t.int %lu\n", strlen(expr->strval));
+            fprintf(dataout, "\t.int %lu\n", (unsigned long)strlen(expr->strval));
             fprintf(cgenout, "	leaq	L%d(%s), %s\n", llen, "%rip", t0);
             loadc(r0, t0, 0, "length of string");
             fprintf(cgenout, "	leaq	L%d(%s), %s\n", lvalue, "%rip", r1);
@@ -1848,6 +1852,12 @@ Expr* restructure_tree(DeclarationList* root)
     abort();
 }
 
+#ifdef _WIN32
+static void unlink_dataout()
+{
+    _unlink(dataoutname);
+}
+#endif
 
 void codegen(DeclarationList* root)
 {
@@ -1883,12 +1893,28 @@ void codegen(DeclarationList* root)
     if (debug_codegen) {
         print_function_table(stderr);
     }
-
-    dataout = tmpfile();
+    #ifdef _WIN32
+        // this seems to return paths starting with '\'
+        dataoutname[0] = '.';
+        if (tmpnam_s(dataoutname + 1, sizeof dataoutname - 1)) {
+            fprintf(stderr, "creating name for temp file name for data "
+                    "section\n");
+            exit(EXIT_FAILURE);
+        }
+        if (debug_codegen) {
+            fprintf(stderr, "dataoutname: %s\n", dataoutname);
+        }
+        dataout = fopen(dataoutname, "w+");
+    #else
+        dataout = tmpfile();
+    #endif
     if (!dataout) {
         perror("creating a temp file for data section");
         exit(EXIT_FAILURE);
     }
+    #ifdef _WIN32
+        atexit(unlink_dataout);
+    #endif
 
     emit_header();
     emit_fn_prologue(curr_func);
@@ -1904,9 +1930,9 @@ void codegen(DeclarationList* root)
 
     fprintf(cgenout, "\n.data\n");
     fseeko(dataout, SEEK_SET, 0);
+    clearerr(dataout);
     flockfile(dataout);
     flockfile(cgenout);
-    clearerr_unlocked(dataout);
     int c;
     while ((c = getc_unlocked(dataout)) != EOF) {
         putc_unlocked(c, cgenout);

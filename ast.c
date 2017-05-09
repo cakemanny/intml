@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <assert.h>
 #include "ast.h"
+#include "platform.h" // e.g. win32 specific macros
 
 // convenience, check memory returned by malloc
 static void* xmalloc(size_t size)
@@ -880,12 +881,6 @@ int tp_count(const char* fmt)
     }
     return nargs;
 }
-
-#ifdef _WIN32
-#   define putc_unlocked(c, stream)     _putc_nolock(c, stream)
-#   define flockfile(stream)            _lock_file(stream)
-#   define funlockfile(stream)          _unlock_file(stream)
-#endif
 
 void tprintfx(FILE* out, const char* fmt, int nargs, ...)
 {
