@@ -17,7 +17,7 @@ char* strbuf_end = strbuf + MAXSTRLITLEN;
 
 INT     [1-9][0-9]*|0
 ID      [a-z][[:alnum:]_]*
-TYPEID  [A-Z][[:alnum:]_]*
+CTORID  [A-Z][[:alnum:]_]*
 WS      [ \t\f\v\r]
 SYMS    [-+*/=<=():\[\];_,^|@]
 %%
@@ -92,13 +92,18 @@ match           { return MATCH; }
 with            { return WITH; }
 function        { return FUNCTION; }
 fun             { return FUN; }
+of              { return OF; }
+and             { return AND; }
+
+true            { yylval.boolval = 1; return BOOL; }
+false           { yylval.boolval = 0; return BOOL; }
 
  /* built in types*/
 {INT}           { yylval.intval = atoi(yytext); return INT; }
 
 {ID}            { yylval.identifier = symbol(yytext); return ID; }
- /* actually constructor */
-{TYPEID}        { yylval.identifier = symbol(yytext); return TYPEID; }
+
+{CTORID}        { yylval.identifier = symbol(yytext); return CTORID; }
  /* punctuation */
 "->"            { return ARROW; }
 "<="            { return LE; }

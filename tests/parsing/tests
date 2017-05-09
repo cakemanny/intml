@@ -59,3 +59,7 @@ expect "let x = f a b" "((let (pvar x) (apply (apply (var f) (var a)) (var b))))
 expect "let x = f a + b" "((let (pvar x) (+ (apply (var f) (var a)) (var b))))"
 expect "let x = f + a b" "((let (pvar x) (+ (var f) (apply (var a) (var b)))))"
 
+#tagged types
+expect "type tree = Node of tree * tree | Leaf of int" \
+    "((typector tree (ctor Node (tree * tree)) (ctor Leaf int)))"
+

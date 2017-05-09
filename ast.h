@@ -13,6 +13,9 @@ DECLARE_STRUCT( Func            );
 DECLARE_STRUCT( Binding         );
 DECLARE_STRUCT( Type            );
 DECLARE_STRUCT( External        );
+DECLARE_STRUCT( TypeCtor        );
+DECLARE_STRUCT( Ctor            );
+DECLARE_STRUCT( CtorList        );
 DECLARE_STRUCT( ParamList       );
 DECLARE_STRUCT( Param           );
 DECLARE_STRUCT( Pattern         );
@@ -71,6 +74,11 @@ struct External {
     Symbol external_name;
 };
 
+struct TypeCtor {
+    Symbol name;
+    CtorList* ctors;
+};
+
 struct Declaration {
     enum DeclTag {
         DECL_FUNC = 1,
@@ -78,12 +86,14 @@ struct Declaration {
         DECL_TYPE,
         DECL_EXTERN,
         DECL_RECFUNC,
+        DECL_TYPECTOR
     }               tag;
     union {
         Func        func;
         Binding     binding;
         Type        type;
         External    ext;
+        TypeCtor    ctor;
     };
 };
 
@@ -100,6 +110,22 @@ struct Param {
     TypeExpr* type;
 
     int var_id; // we misuse these in a closure list and tag them as var
+};
+
+struct CtorList {
+    Ctor* ctor;
+    CtorList* next;
+};
+
+struct Ctor {
+    enum CtorTag {
+        CTOR_NOARG,
+        CTOR_WARG,
+    }       tag;
+    Symbol name;
+    TypeExpr* typexpr;  /* Only for use when tag == CTOR_WARG */
+
+    int ctor_id; // for use is codegen
 };
 
 
@@ -360,6 +386,11 @@ Declaration* type(Symbol name, TypeExpr* definition);
 Declaration* externdecl(Symbol name, TypeExpr* type, Symbol external_name);
 
 /*
+ * Create a type declaration of a constructed type
+ */
+Declaration* type_ctor(Symbol name, CtorList* ctors);
+
+/*
  * Construct a param node from a symbol
  */
 Param* param(Symbol name);
@@ -383,6 +414,17 @@ ParamList* param_list(Param* param);
  * Returns a reversed param list. *Mutates the list*
  */
 ParamList* reverse_params(ParamList* list);
+
+
+Ctor* ctor_noarg(Symbol name);
+
+Ctor* ctor_warg(Symbol name, TypeExpr* typexpr);
+
+CtorList* ctor_list(Ctor* ctor);
+
+CtorList* add_ctor(CtorList* list, Ctor* ctor);
+
+CtorList* reverse_ctors(CtorList* list);
 
 /*
  * The following all create binary expression nodes

@@ -34,10 +34,13 @@ static DeclarationList* tree = NULL;
     TypeExprList*       types;
     Case*               kase;
     CaseList*           kases;
+    Ctor*               ctor;
+    CtorList*           ctors;
 
 /* terminals */
     int                 intval;     // we should probably store these
                                     // as strings/symbols as well...
+    _Bool               boolval;
     Symbol              identifier;
     Symbol              text;
     const char*         error_msg;
@@ -45,8 +48,9 @@ static DeclarationList* tree = NULL;
 
 %token LET REC TYPE IN IF THEN ELSE MATCH WITH FUNCTION FUN
 %token <intval> INT
+%token <boolval> BOOL
 %token <text>   STR_LIT
-%token <identifier> ID TYPEID
+%token <identifier> ID CTORID
 %token <error> ERROR
 %token EOFTOK
 
@@ -62,8 +66,10 @@ static DeclarationList* tree = NULL;
 %type <types> typetuple
 %type <kases> matchings
 %type <kase> matching
+%type <ctors> constructors
+%type <ctor> constructor
 
-%nonassoc LET IN TYPE EXTERNAL MATCH WITH FUN FUNCTION
+%nonassoc LET IN TYPE EXTERNAL MATCH WITH FUN FUNCTION AND
 %right ARROW    /* function typexprs */
 %nonassoc '[' ']' VSTART VEND
 %right ';'
@@ -72,12 +78,13 @@ static DeclarationList* tree = NULL;
 %left '=' '|'   /* right in assignments but left in expressions */
 %nonassoc '<' LE
 %right '^' '@'
+%nonassoc OF
 %right CONS
 %left '+' '-'
 %left '*' '/'
-%left ID INT STR_LIT '('  /* function application -note, typecheck will
-                             stop strings and ints being functions, rather
-                             than the grammar */
+/* function application -note, typecheck will stop strings and ints being
+   functions, rather than the grammar */
+%left ID CTORID INT BOOL STR_LIT '('
 
 %%
 
@@ -92,6 +99,7 @@ declarations:
 declaration:
     letdecl                     { $$ = $1; }
   | TYPE ID '=' typexpr         { $$ = type($2, $4); }
+  | TYPE ID '=' constructors    { $$ = type_ctor($2, reverse_ctors($4)); }
   | EXTERNAL ID ':' typexpr '=' STR_LIT
     {
       $$ = externdecl($2, $4, $6);
@@ -203,6 +211,14 @@ typetuple:
     /* these need to be a list as (1,2,3) != ((1,2),3) and != (1,(2,3))   */
     typeterm '*' typeterm       { $$ = type_add(type_list($1), $3); }
   | typetuple '*' typeterm      { $$ = type_add($1, $3); }
+  ;
+constructors:
+    constructor                     { $$ = ctor_list($1); }
+  | constructors '|' constructor    { $$ = add_ctor($1, $3); }
+  ;
+constructor:
+    CTORID                      { $$ = ctor_noarg($1); }
+  | CTORID OF typexpr           { $$ = ctor_warg($1, $3); }
   ;
 %%
 

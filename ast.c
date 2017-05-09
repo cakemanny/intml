@@ -112,6 +112,15 @@ Declaration* externdecl(Symbol name, TypeExpr* type, Symbol external_name)
     return result;
 }
 
+Declaration* type_ctor(Symbol name, CtorList* ctors)
+{
+    Declaration* result = xmalloc(sizeof *result);
+    result->tag = DECL_TYPECTOR;
+    result->ctor.name = name;
+    result->ctor.ctors = ctors;
+    return result;
+}
+
 Param* param_with_type(Symbol name, TypeExpr* type)
 {
     Param* param = xmalloc(sizeof *param);
@@ -144,6 +153,44 @@ ParamList* param_list(Param* param)
 ParamList* reverse_params(ParamList* list)
 {
     REVERSE_LIST_IMPL(ParamList, list);
+}
+
+static Ctor* ctor(enum CtorTag tag, Symbol name, TypeExpr* typexpr)
+{
+    Ctor* result = xmalloc(sizeof *result);
+    result->tag = tag;
+    result->name = name;
+    result->typexpr = typexpr;
+    result->ctor_id = -1;
+    return result;
+}
+
+Ctor* ctor_noarg(Symbol name)
+{
+    return ctor(CTOR_NOARG, name, NULL);
+}
+
+Ctor* ctor_warg(Symbol name, TypeExpr* typexpr)
+{
+    return ctor(CTOR_WARG, name, typexpr);
+}
+
+CtorList* ctor_list(Ctor* ctor)
+{
+    return add_ctor(NULL, ctor);
+}
+
+CtorList* add_ctor(CtorList* list, Ctor* ctor)
+{
+    CtorList* result = xmalloc(sizeof *result);
+    result->ctor = ctor;
+    result->next = list;
+    return result;
+}
+
+CtorList* reverse_ctors(CtorList* list)
+{
+    REVERSE_LIST_IMPL(CtorList, list);
 }
 
 
@@ -814,6 +861,26 @@ void print_expr(FILE* out, const Expr* expr)
     fputc(')', out);
 }
 
+void print_ctors(FILE* out, const CtorList* ctors)
+{
+    const char* prefix = ""; // all but first get space prefix
+    for (; ctors; ctors = ctors->next) {
+        fputs(prefix, out);
+        fputc('(', out);
+        Ctor* ctor = ctors->ctor;
+        switch (ctor->tag) {
+        case CTOR_NOARG:
+            fprintf(out, "ctor %s", ctor->name);
+            break;
+        case CTOR_WARG:
+            fprintf(out, "ctor %s ", ctor->name);
+            print_typexpr(out, ctor->typexpr);
+            break;
+        }
+        fputc(')', out);
+        prefix = " ";
+    }
+}
 
 void print_declaration(FILE* out, const Declaration* decl)
 {
@@ -843,6 +910,10 @@ void print_declaration(FILE* out, const Declaration* decl)
         fprintf(out, "external %s \"%s\" : ", decl->ext.name,
                 decl->ext.external_name);
         print_typexpr(out, decl->ext.type);
+        break;
+    case DECL_TYPECTOR:
+        fprintf(out, "typector %s ", decl->ctor.name);
+        print_ctors(out, decl->ctor.ctors);
         break;
     }
     fputc(')', out);
