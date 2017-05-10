@@ -154,13 +154,29 @@ expect_fail "let x = match 1 with x, y -> x + y"
 expect_pass "let f z = match z with x, y -> x + y  let w = f (1, 2)"
 expect_fail 'let f z = match z with x, y -> x + y  let w = f (1, "hey")'
 
+# typenames must be declared
+expect_fail "let f (x : missing) = x"
+expect_fail "let f x : missing = x"
+expect_fail "let x = (1 : missing)"
+
 # type aliases
 expect_pass "type metre = int   let f (w:metre) (h:metre) = w * h / 2"
 expect_pass "type intfunc = int -> int  let apply (f:intfunc) x = f x"
+expect_fail "type missing = nosuchtype"
+expect_fail "type missing = nosuchtype  let f (x : missing) = x"
+
 
 #externs
 expect_pass 'external f : int -> int = "example"  let y x = f x + x'
 expect_fail 'external f : string -> string = "example"  let y x = f x + x'
+
+# tagged types
+expect_fail "type tree = Node of int | Node of string"
+expect_pass "type tree = Node of tree * tree | Leaf of int"
+expect_pass "type tree = Node of tree * tree | Leaf of int  let x = Leaf 5"
+expect_pass "type dice = Heads | Tails  let id (x : dice) = x"
+expect_pass "type dice = Heads | Tails  let ishead x = if x = Heads then 1 else 0"
+expect_fail "type dice = Heads | Tails  type bool = False | True  let x = Heads = True"
 
 if [[ $failures == 1 ]]; then
     echo 1 failure

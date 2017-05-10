@@ -511,6 +511,7 @@ static void apply_theory(
         {
           case DECL_EXTERN:
           case DECL_TYPE:
+          case DECL_TYPECTOR:
             break;
           case DECL_BIND:
           {
@@ -531,6 +532,45 @@ static void apply_theory(
             apply_theory_expr(decl->func.body, constraint_id, theory);
             break;
           }
+        }
+    }
+}
+
+static void check_type_names_are_declared(TypeExpr* typexpr)
+{
+    switch (typexpr->tag)
+    {
+        case TYPE_NAME:
+        {
+            if (!lookup_ornull_typexpr(typexpr->name)) {
+                fprintf(stderr, "type name %s was not declared\n",
+                        typexpr->name);
+                exit(EXIT_FAILURE);
+            }
+            return;
+        }
+        case TYPE_ARROW:
+        {
+            check_type_names_are_declared(typexpr->left);
+            check_type_names_are_declared(typexpr->right);
+            return;
+        }
+        case TYPE_CONSTRAINT:
+        {
+            return;
+        }
+        case TYPE_TUPLE:
+        {
+            for (TypeExprList* l = typexpr->type_list; l; l = l->next) {
+                check_type_names_are_declared(l->type);
+            }
+            return;
+        }
+        case TYPE_CONSTRUCTOR:
+        {
+            // TODO: need to check the constructor name has been declared
+            check_type_names_are_declared(typexpr->param);
+            return;
         }
     }
 }
@@ -868,6 +908,10 @@ static int deducetype_expr(Expr* expr)
     TypeExpr* unit_type = lookup_typexpr(symbol("unit"));
     TypeExpr* string_type = lookup_typexpr(symbol("string"));
 
+    if (expr->type) {
+        check_type_names_are_declared(expr->type);
+    }
+
     dbgprint("deduce type of %s expression\n", expr_name(expr->tag));
 
     /*
@@ -1082,6 +1126,9 @@ static int deducetype_expr(Expr* expr)
         struct Var* pre_param_stack_ptr = var_stack_ptr;
 
         for (const ParamList* c = expr->func.params; c; c = c->next) {
+            if (c->param->type) {
+                check_type_names_are_declared(c->param->type);
+            }
             if (!c->param->type && c->param->name == symbol("()")) {
                 c->param->type = unit_type;
                 types_added++;
@@ -1098,6 +1145,7 @@ static int deducetype_expr(Expr* expr)
         TypeExpr* bodytype = expr->func.body->type;
 
         if (expr->func.resulttype) {
+            check_type_names_are_declared(expr->func.resulttype);
             typexpr_conforms_or_exit(expr->func.resulttype, bodytype,
                     "body of function %s", expr->func.name);
             types_added += theorise_equal(bodytype, expr->func.resulttype);
@@ -1426,6 +1474,7 @@ __pure static _Bool declares_name(Declaration* declaration, Symbol name)
                                 declaration->binding.pattern, name);
         case DECL_TYPE: return declaration->type.name == name;
         case DECL_EXTERN: return declaration->ext.name == name;
+        case DECL_TYPECTOR: return declaration->ctor.name == name;
     }
     FAIL_MISSED_CASE();
 }
@@ -1467,6 +1516,7 @@ __pure static TypeExpr** decl_type_ptr(Declaration* declaration, Symbol name)
                         // chances are we don't want this case:
         case DECL_TYPE: return &declaration->type.definition;
         case DECL_EXTERN: return &declaration->ext.type;
+        case DECL_TYPECTOR: return NULL; // Shouldn't be used
     }
     FAIL_MISSED_CASE();
 }
@@ -1497,6 +1547,7 @@ static void type_and_check_exhaustively(DeclarationList* root)
             {
               case DECL_TYPE:
               {
+                check_type_names_are_declared(decl->type.definition);
                 add_type_name(&decl->type);
                 break;
               }
@@ -1649,6 +1700,45 @@ static void type_and_check_exhaustively(DeclarationList* root)
                     exit(EXIT_FAILURE);
                 }
                 push_var(decl->ext.name, decl->ext.type);
+                break;
+              }
+              case DECL_TYPECTOR:
+              {
+                // For tagged types, we might need to revisit the type
+                // definition system
+
+                // 0. Check that there are no duplicate constructor names
+                for (CtorList* l = decl->ctor.ctors; l; l = l->next) {
+                    for (CtorList* m = decl->ctor.ctors; m; m = m->next) {
+                        if (l < m && l->ctor->name == m->ctor->name) {
+                            fprintf(stderr, EPFX"There are two constructors "
+                                    "with the same name: %s\n", l->ctor->name);
+                            exit(EXIT_FAILURE);
+                        }
+                    }
+                }
+
+                // 1. Add the type name to a list of named types
+                add_builtin_type(decl->ctor.name); // FIXME
+                // 2. Add the constructors as vars
+                for (CtorList* l = decl->ctor.ctors; l; l = l->next) {
+                    Ctor* ctor = l->ctor;
+                    switch (ctor->tag) {
+                      case CTOR_NOARG:
+                        push_var(ctor->name, lookup_typexpr(decl->ctor.name));
+                        break;
+                      case CTOR_WARG:
+                      {
+                        check_type_names_are_declared(ctor->typexpr);
+                        TypeExpr* param_type = ctor->typexpr;
+                        TypeExpr* result_type = lookup_typexpr(decl->ctor.name);
+                        push_var(ctor->name, typearrow(param_type, result_type));
+                        break;
+                      }
+                    }
+                }
+
+                //assert(0 && "TODO: implement tagged types");
                 break;
               }
             }
@@ -1932,6 +2022,11 @@ static _Bool check_if_fully_typed_root(DeclarationList* root)
             }
             break;
           }
+          case DECL_TYPECTOR:
+          {
+              // Not sure we have to do anything with this one
+              break;
+          }
         }
     }
     return result;
@@ -1983,6 +2078,7 @@ void check_runtime_properties(DeclarationList* root)
                   case DECL_TYPE: break; // don't care about type
                   case DECL_EXTERN: return; // Should we allow external main
                   case DECL_RECFUNC: return; // not sure if this should be allowed
+                  case DECL_TYPECTOR: break; // don't care about typectors
                 }
             } else if (decl->tag != DECL_TYPE) {
                 fprintf(stderr, EPFX"main has incorrect type\n");

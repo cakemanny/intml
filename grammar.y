@@ -159,6 +159,7 @@ exprterm:
   | '[' exprlist ']'            { $$ = list($2); }
   | VSTART exprlist VEND        { $$ = vector($2); }
   | ID                          { $$ = var($1); }
+  | CTORID                      { $$ = var($1); }
   | '(' ')'                     { $$ = unit_expr(); }
   | INT                         { $$ = intval($1); }
   | STR_LIT                     { $$ = strval($1); }
