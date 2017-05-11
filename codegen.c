@@ -146,6 +146,13 @@ static struct VarEx {
 typedef struct VarEx VarEx;
 static int var_table_count = 0;
 
+#define TYPE_NAMES_MAX 1024
+static struct TypeSize {
+    Symbol name;
+    size_t size;
+} type_sizes[TYPE_NAMES_MAX];
+int type_sizes_count = 0;
+
 /* Some pre-declarations */
 static size_t stack_size_of_type(TypeExpr* type);
 
@@ -160,7 +167,6 @@ static Function* add_function_w_parent(Symbol name, TypeExpr* type, Function* pa
         .var_stack_start = var_stack_ptr - variable_stack
     };
     return &function_table[fn_table_count++];
-
 }
 
 static Function* add_function(Symbol name, TypeExpr* type)
@@ -278,6 +284,18 @@ static void add_var_to_locals(Function* func, Symbol name, TypeExpr* type)
 
     push_var(name, type);
     (var_stack_ptr - 1)->var_id = var_table_count - 1;
+}
+
+static void add_type_size(Symbol name, size_t size)
+{
+    if (type_sizes_count >= TYPE_NAMES_MAX) {
+        fprintf(stderr, EPFX"too many types, > %d", TYPE_NAMES_MAX);
+        exit(EXIT_FAILURE);
+    }
+    type_sizes[type_sizes_count++] = (struct TypeSize){
+        .name = name,
+        .size = size
+    };
 }
 
 // These functions are designed to look a bit like ARM intructions so
@@ -969,17 +987,31 @@ static void gen_stack_machine_code(Expr* expr)
             break;
         case LESSTHAN:
         case LESSEQUAL:
-        case EQUAL:
         {
-            gen_sm_binop(expr); // only will work for single word values
+            gen_sm_binop(expr);
             mov(t1, r0);
             mov_imm(r0, 0LL);
             cmp(t0, t1);
             int end = request_label();
             if (expr->tag == LESSTHAN)          bge(end); // invert each cond
             else if (expr->tag == LESSEQUAL)    bgt(end);
-            else if (expr->tag == EQUAL)        bne(end);
             else assert(0);
+            mov_imm(r0, 1LL); // if so, skip this instruction
+            label(end);
+            break;
+        }
+        case EQUAL:
+        {
+            gen_sm_binop(expr); // only will work for single word values
+            mov(r2, r0);
+            mov_imm(r0, 0LL);
+            cmp(t0, r2);
+            int end = request_label();
+            bne(end);
+            if (stack_size_of_type(expr->left->type) > WORD_SIZE) {
+                cmp(t1, r1);
+                bne(end);
+            }
             mov_imm(r0, 1LL); // if so, skip this instruction
             label(end);
             break;
@@ -1428,6 +1460,12 @@ static size_t stack_size_of_type(TypeExpr* type)
             // 2: data:   char*
             return 2 * WORD_SIZE;
         }
+
+        for (int i = 0; i < type_sizes_count; i++) {
+            if (type->name == type_sizes[i].name)
+                return type_sizes[i].size;
+        }
+
         fprintf(stderr, "%s\n", type->name);
         // FIXME: we either need to keep type map in here, fully expand the
         // types in the typechecker or annotate the types with size
@@ -1774,6 +1812,8 @@ static void rewrite_functions(Expr* expr)
     }
 }
 
+static Expr* write_constructor_functions(
+        Symbol tname, int idx, CtorList* list, DeclarationList* root_next);
 /*
  * Change the program from a sequence of declarations into one big
  * expression, this reduces the number of cases we have to handle in codegen
@@ -1787,7 +1827,7 @@ static void rewrite_functions(Expr* expr)
  *   let main () = ... in
  *   main ()
  */
-Expr* restructure_tree(DeclarationList* root)
+static Expr* restructure_tree(DeclarationList* root)
 {
     if (!root) {
         Expr* final_node = apply(var(symbol("main")), unit_expr());
@@ -1818,7 +1858,7 @@ Expr* restructure_tree(DeclarationList* root)
           }
           case DECL_RECFUNC:
           {
-              Expr* newnode = local_recfunc_w_type(
+            Expr* newnode = local_recfunc_w_type(
                     decl->func.name,
                     decl->func.params,
                     decl->func.resulttype,
@@ -1830,26 +1870,123 @@ Expr* restructure_tree(DeclarationList* root)
           }
           case DECL_BIND:
           {
-              Expr* newnode = local_binding(
-                      decl->binding.pattern,
-                      decl->binding.init,
-                      restructure_tree(root->next));
-              newnode->type = newnode->binding.subexpr->type;
-              return newnode;
+            Expr* newnode = local_binding(
+                    decl->binding.pattern,
+                    decl->binding.init,
+                    restructure_tree(root->next));
+            newnode->type = newnode->binding.subexpr->type;
+            return newnode;
           }
           case DECL_EXTERN:
           {
-              Expr* newnode = local_extern(
-                      decl->ext.name,
-                      decl->ext.type,
-                      decl->ext.external_name,
-                      restructure_tree(root->next));
-              newnode->type = newnode->ext.subexpr->type;
-              return newnode;
+            Expr* newnode = local_extern(
+                    decl->ext.name,
+                    decl->ext.type,
+                    decl->ext.external_name,
+                    restructure_tree(root->next));
+            newnode->type = newnode->ext.subexpr->type;
+            return newnode;
+          }
+          case DECL_TYPECTOR:
+          {
+            // Here we want to define functions that make up the constructors
+            // I think....
+            return write_constructor_functions(
+                    decl->ctor.name, 0, decl->ctor.ctors, root->next);
           }
         }
     }
     abort();
+}
+
+static Expr* write_constructor_functions(
+        Symbol tname, int idx, CtorList* list, DeclarationList* root_next)
+{
+    if (!list) {
+        return restructure_tree(root_next);
+    } else {
+        Ctor* ctor = list->ctor;
+        switch (ctor->tag) {
+          case CTOR_NOARG:
+          {
+            Pattern* pattern = pat_var(ctor->name);
+            Expr* init = intval(idx);
+            pattern->type =
+                init->type = typename(tname);  // Should we ?!
+            Expr* newnode = local_binding(pattern, init,
+                    write_constructor_functions(
+                        tname, idx + 1, list->next, root_next));
+            newnode->type = newnode->binding.subexpr->type;
+            return newnode;
+          }
+          case CTOR_WARG:
+          {
+
+            // create a constructor function that looks like
+            // let f _1 = (idx, _1)
+            Expr* body = tuple(
+                    add_expr(
+                        add_expr(exprlist(), var(symbol("_1"))),
+                        intval(idx)));
+            body->expr_list->expr->type = typename(symbol("int"));
+            body->expr_list->next->expr->type = ctor->typexpr;
+
+            Expr* newnode = local_func_w_type(
+                    ctor->name,
+                    param_list(param_with_type(symbol("_1"), ctor->typexpr)),
+                    typename(tname),
+                    body,
+                    write_constructor_functions(
+                        tname, idx + 1, list->next, root_next));
+            body->type = newnode->func.resulttype;
+            newnode->func.functype = typearrow(ctor->typexpr, body->type);
+            newnode->type = newnode->func.subexpr->type;
+            return newnode;
+          }
+        }
+    }
+}
+
+static void add_custom_type_sizes(DeclarationList* root)
+{
+    for (DeclarationList* l = root; l; l = l->next) {
+        Declaration* decl = l->declaration;
+        switch (decl->tag) {
+          case DECL_FUNC:
+          case DECL_RECFUNC:
+          case DECL_BIND:
+          case DECL_EXTERN:
+            // These don't declare a type
+            break;
+          case DECL_TYPE:
+            add_type_size(
+                    decl->type.name,
+                    stack_size_of_type(decl->type.definition));
+            break;
+          case DECL_TYPECTOR:
+          {
+            int size_of_tag = stack_size_of_type(typename(symbol("int")));
+            // The size of the held data is the max over the sizes from each
+            // constructor
+            int size_of_data = 0;
+            for (CtorList* l = decl->ctor.ctors; l; l = l->next) {
+                Ctor* ctor = l->ctor;
+                switch (ctor->tag) {
+                  case CTOR_NOARG:
+                    break;
+                  case CTOR_WARG:
+                  {
+                    int ssot = stack_size_of_type(ctor->typexpr);
+                    size_of_data = size_of_data > ssot ? size_of_data : ssot;
+                    break;
+                  }
+                }
+            }
+            add_type_size(decl->type.name, size_of_tag + size_of_data);
+            break;
+          }
+        }
+    }
 }
 
 #ifdef _WIN32
@@ -1870,6 +2007,8 @@ void codegen(DeclarationList* root)
      *
      */
     assert(cgenout != NULL);
+
+    add_custom_type_sizes(root);
 
     Expr* newroot = restructure_tree(root);
     if (debug_codegen) {

@@ -113,6 +113,36 @@ let (w,x) :: (y,z) :: _ = [ (2, 3); (5, 7); (11,13) ]
 in w * x * y * z
 " 210
 
+expect2 "type dice = Tails | Heads
+let isheads x = if x = Heads then 1 else 0
+let main () = isheads Heads" 1
+
+expect2 "type dice = Tails | Heads
+let isheads x = if x = Heads then 1 else 0
+let main () = isheads Tails" 0
+
+expect2 "type lisp_val = String of string | Int of int | Empty
+let is_empty x = if x = Empty then 1 else 0
+let main () = is_empty (Int 5)" 0
+
+expect2 "type lisp_val = String of string | Int of int | Empty
+let is_empty x = if x = Empty then 1 else 0
+let main () = is_empty Empty" 1
+
+expect2 'type lisp_val = String of string | Int of int | Empty
+let is_empty x = if x = Empty then 1 else 0
+let main () = is_empty (String "hi")' 0
+
+expect2 "let main () = (1,1) = (1,1)" 1
+expect2 "let main () = (1,2) = (1,2)" 1
+expect2 "let main () = (1,1) = (1,2)" 0
+expect2 "let main () = (0,1) = (1,1)" 0
+
+expect2 "let main () = [1] = [1]" 1
+expect2 "let main () = [0] = [1]" 0
+expect2 "let main () = [0;1] = [0;1]" 1
+expect2 "let main () = [0;1] = [1;0]" 1
+
 # Exit with the number of failing tests
 exit $exitcode
 
