@@ -1110,16 +1110,12 @@ static void gen_stack_machine_code(Expr* expr)
             }
             fputs("\"\n", dataout);
 
+            // Length of string into r0 - not include terminating null...
+            mov_imm(r0, strlen(expr->strval));
 #ifdef __x86_64__
-            int llen = request_label();
-            fprintf(dataout, ".p2align 3\n");
-            fprintf(dataout, "L%d:\n", llen);
-            fprintf(dataout, "\t.int %lu\n", (unsigned long)strlen(expr->strval));
-            fprintf(cgenout, "	leaq	L%d(%s), %s\n", llen, "%rip", t0);
-            loadc(r0, t0, 0, "length of string");
+            // load address of string into r1
             fprintf(cgenout, "	leaq	L%d(%s), %s\n", lvalue, "%rip", r1);
 #elif defined(__arm__)
-            fprintf(cgenout, "	ldr	%s,	=%u\n", t0, strlen(expr->strval));
             fprintf(cgenout, "	ldr	%s, =L%d\n", r1, lvalue);
 #else
 #   error "Unknown platform"
