@@ -760,6 +760,39 @@ static void emit_fn_epilogue(Function* func)
 #endif
 }
 
+static int label_for_str_or_add(Symbol str_lit)
+{
+    #define LIT_LBLS_MAX 1024
+    static struct { Symbol literal; int label; } lookup[LIT_LBLS_MAX];
+    static int lookup_count = 0;
+
+    // Check if we have already emitted, else emit
+    for (int i = 0; i < lookup_count; i++) {
+        if (str_lit == lookup[i].literal)
+            return lookup[i].label;
+    }
+
+    int label = request_label();
+    fprintf(dataout, ".p2align %d\n", __builtin_ctz(WORD_SIZE));
+    fprintf(dataout, "L%d:\n", label);
+    fputs("\t.string \"", dataout);
+    const char* s = str_lit;
+    while (*s != 0) {
+        if (*s == '\n') { fputs("\\n", dataout); }
+        else if (*s == '\\') { fputs("\\\\", dataout); }
+        else if (*s == '\t') { fputs("\\t", dataout); }
+        else fputc(*s, dataout);
+        s++;
+    }
+    fputs("\"\n", dataout);
+
+    lookup[lookup_count].literal = str_lit;
+    lookup[lookup_count].label = label;
+    lookup_count += 1;
+    return label;
+}
+
+
 #ifdef __x86_64__
 #   define ASM_COMMENT "# "
 #else
@@ -1096,20 +1129,7 @@ static void gen_stack_machine_code(Expr* expr)
         {
             // 1. Emit string constant into the constants area with a label
             // 2. Emit a load instruction
-            int lvalue = request_label();
-            fprintf(dataout, ".p2align %d\n", __builtin_ctz(WORD_SIZE));
-            fprintf(dataout, "L%d:\n", lvalue);
-            fputs("\t.string \"", dataout);
-            const char* s = expr->strval;
-            while (*s != 0) {
-                if (*s == '\n') { fputs("\\n", dataout); }
-                else if (*s == '\\') { fputs("\\\\", dataout); }
-                else if (*s == '\t') { fputs("\\t", dataout); }
-                else fputc(*s, dataout);
-                s++;
-            }
-            fputs("\"\n", dataout);
-
+            int lvalue = label_for_str_or_add(expr->strval);
             // Length of string into r0 - not include terminating null...
             mov_imm(r0, strlen(expr->strval));
 #ifdef __x86_64__
