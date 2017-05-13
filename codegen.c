@@ -552,6 +552,20 @@ static void label(int label_number)
 {
     fprintf(cgenout, "L%d:\n", label_number);
 }
+static void load_label(reg dst, const char* lbl)
+{
+    #ifdef __x86_64__
+        fprintf(cgenout, "\tleaq\t%s(%s), %s\n", lbl, "%rip", dst);
+    #else
+        fprintf(cgenout, "	ldr	%s, =%s\n", dst, lbl);
+    #endif
+}
+static void load_tmplabel(reg dst, int label_number)
+{
+    char lbl[12] = {}; // 1 byte for L, 10 for largest possible unsigned, 1 for \0
+    snprintf(lbl, 12, "L%u", (unsigned)label_number);
+    load_label(dst, lbl);
+}
 static void beq(int label) // branch equal
 {
     #ifdef __x86_64__
@@ -1127,19 +1141,10 @@ static void gen_stack_machine_code(Expr* expr)
             break;
         case STRVAL:
         {
-            // 1. Emit string constant into the constants area with a label
-            // 2. Emit a load instruction
-            int lvalue = label_for_str_or_add(expr->strval);
             // Length of string into r0 - not include terminating null...
             mov_imm(r0, strlen(expr->strval));
-#ifdef __x86_64__
             // load address of string into r1
-            fprintf(cgenout, "	leaq	L%d(%s), %s\n", lvalue, "%rip", r1);
-#elif defined(__arm__)
-            fprintf(cgenout, "	ldr	%s, =L%d\n", r1, lvalue);
-#else
-#   error "Unknown platform"
-#endif
+            load_tmplabel(r1, label_for_str_or_add(expr->strval));
             break;
         }
         case RECFUNC_EXPR:
@@ -1163,11 +1168,7 @@ static void gen_stack_machine_code(Expr* expr)
             assert(expr->func.var_id < var_table_count);
             const VarEx varx = variable_table[expr->func.var_id];
             char* lbl = function_label(func);
-#ifdef __x86_64__
-            fprintf(cgenout, "\tleaq\t%s(%s), %s\n", lbl, "%rip", r0);
-#else
-            fprintf(cgenout, "	ldr	%s, =%s\n", r0, lbl);
-#endif
+            load_label(r0, lbl);
             store(-varx.stack_offset, bp, r0);
             free(lbl);
             // allocate closure, fill it and store in correct location
@@ -1334,8 +1335,7 @@ static void gen_stack_machine_code(Expr* expr)
         case EXTERN_EXPR: // it's quite similar...
         {
             const VarEx varx = variable_table[expr->ext.var_id];
-            const char* lbl = expr->ext.external_name;
-            fprintf(cgenout, "\tleaq\t%s(%s), %s\n", lbl, "%rip", r0);
+            load_label(r0, expr->ext.external_name);
             store(-varx.stack_offset, bp, r0);
 
             gen_stack_machine_code(expr->ext.subexpr);
