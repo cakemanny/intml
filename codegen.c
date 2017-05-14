@@ -435,6 +435,40 @@ static void loadc(reg dst, reg src, int off, const char* comment)
         else fputs("\n", cgenout);
     #endif
 }
+static void load(reg dst, reg src, int off)
+{
+    loadc(dst, src, off, NULL);
+}
+static void load2(reg base, reg op0, reg op1)
+{
+    #ifdef __x86_64__
+        load(op0, base, 0);
+        load(op1, base, WORD_SIZE);
+    #else
+        fprintf(cgenout, "	ldm	%s, {%s,%s}\n", base, op0, op1);
+    #endif
+}
+static void load3(reg base, reg op0, reg op1, reg op2)
+{
+    #ifdef __x86_64__
+        load(op0, base, 0 * WORD_SIZE);
+        load(op1, base, 1 * WORD_SIZE);
+        load(op2, base, 2 * WORD_SIZE);
+    #else
+        fprintf(cgenout, "	ldm	%s, {%s,%s,%s}\n", base, op0, op1, op2);
+    #endif
+}
+static void load4(reg base, reg op0, reg op1, reg op2, reg op3)
+{
+    #ifdef __x86_64__
+        load(op0, base, 0 * WORD_SIZE);
+        load(op1, base, 1 * WORD_SIZE);
+        load(op2, base, 2 * WORD_SIZE);
+        load(op3, base, 3 * WORD_SIZE);
+    #else
+        fprintf(cgenout, "	ldm	%s, {%s,%s,%s,%s}\n", base, op0, op1, op2, op3);
+    #endif
+}
 static void store(int off, reg dst, reg src)
 {
     #ifdef __x86_64__
@@ -843,6 +877,7 @@ static void gen_stack_machine_code(Expr* expr);
  */
 static void gen_list_from_end(ExprList* list, int node_size)
 {
+    // TODO: need to work out larger sizes
     assert(node_size <= 4 * WORD_SIZE); // just for time being
     if (list) {
         // put the tail of list in r0
@@ -897,6 +932,8 @@ static void gen_sm_unapply_pat(Pattern* pat)
       {
         const VarEx var = variable_table[pat->var_id];
         switch (var.size) { // These are meant to fall through
+          case 4 * WORD_SIZE:   store(-var.stack_offset - 3 * WORD_SIZE, bp, r3);
+          case 3 * WORD_SIZE:   store(-var.stack_offset - 2 * WORD_SIZE, bp, r2);
           case 2 * WORD_SIZE:   store(-var.stack_offset - WORD_SIZE, bp, r1);
           case WORD_SIZE:       store(-var.stack_offset, bp, r0); // Store r0 into stack
           case 0:               break;
@@ -923,16 +960,19 @@ static void gen_sm_unapply_pat(Pattern* pat)
 
         // Load head data
         mov(t0, r0);
-        // TODO: convert these into single arm instruction-like fn abstractions
-        switch (WORD_SIZE + stack_size_of_type(pat->left->type)) {
-          case 3 * WORD_SIZE:   loadc(r1, t0, 2*WORD_SIZE,  "w2 into r1");
-          case 2 * WORD_SIZE:   loadc(r0, t0, WORD_SIZE,    "w1 into r0");
-          case 1 * WORD_SIZE:   loadc(t1, t0, 0,            "pnext into t1");
-              break;
+        mov(t1, r0);
+        add_imm(t1, WORD_SIZE);
+        switch (stack_size_of_type(pat->left->type)) {
+          case 4 * WORD_SIZE:   load4(t1, r0, r1, r2, r3); break;
+          case 3 * WORD_SIZE:   load3(t1, r0, r1, r2); break;
+          case 2 * WORD_SIZE:   load2(t1, r0, r1); break;
+          case 1 * WORD_SIZE:   loadc(r0, t1, 0,  "w1 into r0"); break;
+          case 0 * WORD_SIZE:   break;
           default:
             assert(0 && "TODO: deal with larger variables");
             break;
         }
+        loadc(t1, t0, 0, "pnext into t1");
 
         // Save pnext on stack -- if pat->left is discard or var we can elide
         // this push (later in optimization excercise)
