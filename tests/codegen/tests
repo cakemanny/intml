@@ -150,7 +150,7 @@ expect2 "let main () = (0,1) = (1,1)" 0
 expect2 "let main () = [1] = [1]" 1
 expect2 "let main () = [0] = [1]" 0
 expect2 "let main () = [0;1] = [0;1]" 1
-expect2 "let main () = [0;1] = [1;0]" 1
+expect2 "let main () = [0;1] = [1;0]" 0
 
 # Exit with the number of failing tests
 exit $exitcode

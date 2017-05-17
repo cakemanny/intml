@@ -247,7 +247,7 @@ struct TypeExprList {
     TypeExprList* next;
 };
 
-/* */
+/*  */
 struct TPat {
     enum TPatTag {
         TPAT_VAR = 1,
@@ -255,6 +255,11 @@ struct TPat {
         TPAT_CONS,
         TPAT_TUPLE,
         TPAT_PATTERN,
+        TPAT_CTOR_NOARG,
+        TPAT_CTOR_WARG,
+        TPAT_INT,
+        TPAT_STR,
+        TPAT_NIL,
     } tag;
     union {
         Symbol name; /* TPAT_VAR */
@@ -262,7 +267,13 @@ struct TPat {
             TPat* left;  /* TPAT_CONS, TPAT_TUPLE */
             TPat* right;
         };
-        Pattern* pattern; /* TPAT_PATTERN*/
+        Pattern* pattern; /* TPAT_PATTERN */
+        struct {
+            Symbol ctor_name;
+            TPat* ctor_arg;
+        };
+        int intval; /* TPAT_INT */
+        Symbol strval; /* TPAT_STR */
     };
 };
 
@@ -272,6 +283,11 @@ struct Pattern {
         PAT_DISCARD,
         PAT_CONS,
         PAT_TUPLE,
+        PAT_CTOR_NOARG,
+        PAT_CTOR_WARG,
+        PAT_INT,
+        PAT_STR,
+        PAT_NIL,
     } tag;
     union {
         struct {
@@ -283,6 +299,12 @@ struct Pattern {
             Pattern* right;
         };
         PatternList* pat_list;  /* PAT_TUPLE*/
+        struct {
+            Symbol ctor_name; /* PAT_CTOR_WARG, PAT_CTOR_NOARG */
+            Pattern* ctor_arg; /* PAT_CTOR_WARG */
+        };
+        int intval; /* PAT_INT */
+        Symbol strval; /* PAT_STR */
     };
     TypeExpr* type;
 };
@@ -602,6 +624,12 @@ Pattern* pat_cons(Pattern* head, Pattern* tail);
  */
 Pattern* pat_tuple(PatternList* list);
 
+Pattern* pat_constr_warg(Symbol ctor_name, Pattern* ctor_arg);
+Pattern* pat_constr_noarg(Symbol ctor_name);
+Pattern* pat_int(int intval);
+Pattern* pat_str(Symbol strval);
+Pattern* pat_nil();
+
 /*
  * A non-empty list.
  */
@@ -621,6 +649,11 @@ TPat* tpat_discard();
 TPat* tpat_cons(TPat* head, TPat* tail);
 TPat* tpat_tuple(TPat* first, TPat* rest);
 TPat* tpat_pattern(Pattern* pattern);
+TPat* tpat_constr_warg(Symbol ctor_name, TPat* ctor_arg);
+TPat* tpat_constr_noarg(Symbol ctor_name);
+TPat* tpat_int(int intval);
+TPat* tpat_str(Symbol strval);
+TPat* tpat_nil();
 
 /*
  * Convert from a TPat to a Pattern

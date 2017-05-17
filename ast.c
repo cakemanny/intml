@@ -500,6 +500,40 @@ Pattern* pat_tuple(PatternList* list)
     return result;
 }
 
+Pattern* pat_constr_noarg(Symbol ctor_name)
+{
+    Pattern* result = pat(PAT_CTOR_NOARG);
+    result->ctor_name = ctor_name;
+    return result;
+}
+
+Pattern* pat_constr_warg(Symbol ctor_name, Pattern* ctor_arg)
+{
+    Pattern* result = pat(PAT_CTOR_WARG);
+    result->ctor_name = ctor_name;
+    result->ctor_arg = ctor_arg;
+    return result;
+}
+
+Pattern* pat_int(int intval)
+{
+    Pattern* result = pat(PAT_INT);
+    result->intval = intval;
+    return result;
+}
+
+Pattern* pat_str(Symbol strval)
+{
+    Pattern* result = pat(PAT_STR);
+    result->strval = strval;
+    return result;
+}
+
+Pattern* pat_nil()
+{
+    return pat(PAT_NIL);
+}
+
 PatternList* add_pat(PatternList* list, Pattern* newhead)
 {
     PatternList* result = xmalloc(sizeof *result);
@@ -552,6 +586,40 @@ TPat* tpat_pattern(Pattern* pattern)
     return tp;
 }
 
+TPat* tpat_constr_warg(Symbol ctor_name, TPat* ctor_arg)
+{
+    TPat* tp = tpat(TPAT_CTOR_WARG);
+    tp->ctor_name = ctor_name;
+    tp->ctor_arg = ctor_arg;
+    return tp;
+}
+
+TPat* tpat_constr_noarg(Symbol ctor_name)
+{
+    TPat* tp = tpat(TPAT_CTOR_NOARG);
+    tp->ctor_name = ctor_name;
+    return tp;
+}
+
+TPat* tpat_int(int intval)
+{
+    TPat* tp = tpat(TPAT_INT);
+    tp->intval = intval;
+    return tp;
+}
+
+TPat* tpat_str(Symbol strval)
+{
+    TPat* tp = tpat(TPAT_STR);
+    tp->strval = strval;
+    return tp;
+}
+
+TPat* tpat_nil()
+{
+    return tpat(TPAT_NIL);
+}
+
 void print_tpat(FILE* out, TPat* tpat)
 {
     fputc('(', out);
@@ -577,6 +645,22 @@ void print_tpat(FILE* out, TPat* tpat)
         case TPAT_PATTERN:
             fputs("tpattern ", out);
             print_pattern(out, tpat->pattern);
+            break;
+        case TPAT_CTOR_NOARG:
+            fprintf(out, "tctor %s", tpat->ctor_name);
+            break;
+        case TPAT_CTOR_WARG:
+            fprintf(out, "tctor %s ", tpat->ctor_name);
+            print_tpat(out, tpat->ctor_arg);
+            break;
+        case TPAT_STR:
+            fprintf(out, "tint \"%s\n", tpat->strval);
+            break;
+        case TPAT_INT:
+            fprintf(out, "tint %d", tpat->intval);
+            break;
+        case TPAT_NIL:
+            fputs("tnil", out);
             break;
     }
     fputc(')', out);
@@ -608,6 +692,16 @@ Pattern* tpat_to_pat(TPat* tpat)
             result = add_pat(result, tpat_to_pat(tmp));
             return pat_tuple(result);
         }
+        case TPAT_CTOR_WARG:
+            return FF(pat_constr_warg(tpat->ctor_name, tpat_to_pat(tpat->ctor_arg)));
+        case TPAT_CTOR_NOARG:
+            return FF(pat_constr_noarg(tpat->ctor_name));
+        case TPAT_INT:
+            return FF(pat_int(tpat->intval));
+        case TPAT_STR:
+            return FF(pat_str(tpat->strval));
+        case TPAT_NIL:
+            return FF(pat_nil());
     }
 #undef FF
     //fprintf(stderr, "%s, %s:%d\n", __FUNCTION__, __FILE__, __LINE__);
@@ -722,6 +816,21 @@ void print_patternlist(FILE* out, const PatternList* list)
     }
 }
 
+void print_escaped(FILE* out, const char* string)
+{
+    flockfile(out);
+    for (const char* s = string; *s; s++) {
+        switch (*s) {
+            case '\n': putc_unlocked('\\', out); putc_unlocked('n', out); break;
+            case '\r': putc_unlocked('\\', out); putc_unlocked('r', out); break;
+            case '\t': putc_unlocked('\\', out); putc_unlocked('t', out); break;
+            case '\\': putc_unlocked('\\', out); putc_unlocked('\\', out); break;
+            default: putc_unlocked(*s, out);
+        }
+    }
+    funlockfile(out);
+}
+
 void print_pattern(FILE* out, const Pattern* pat)
 {
     fputs("(p", out);
@@ -733,18 +842,33 @@ void print_pattern(FILE* out, const Pattern* pat)
             fputs("discard", out);
             break;
         case PAT_CONS:
-        {
             fputs("cons ", out);
             print_pattern(out, pat->left);
             fputc(' ', out);
             print_pattern(out, pat->right);
             break;
-        }
         case PAT_TUPLE:
-        {
             fputs("tuple ", out);
             print_patternlist(out, pat->pat_list);
-        }
+            break;
+        case PAT_CTOR_NOARG:
+            fprintf(out, "ctor %s", pat->ctor_name);
+            break;
+        case PAT_CTOR_WARG:
+            fprintf(out, "ctor %s ", pat->ctor_name);
+            print_pattern(out, pat->ctor_arg);
+            break;
+        case PAT_INT:
+            fprintf(out, "int %d", pat->intval);
+            break;
+        case PAT_STR:
+            fputs("str \"", out);
+            print_escaped(out, pat->strval);
+            fputc('"', out);
+            break;
+        case PAT_NIL:
+            fputs("nil", out);
+            break;
     }
     fputc(')', out);
 }

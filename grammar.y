@@ -121,6 +121,11 @@ tpattern:
   | '_'                         { $$ = tpat_discard(); }
   | tpattern CONS tpattern      { $$ = tpat_cons($1, $3); }
   | tpattern ',' tpattern       { $$ = tpat_tuple($1, $3); }
+  | CTORID tpattern             { $$ = tpat_constr_warg($1, $2); }
+  | CTORID                      { $$ = tpat_constr_noarg($1); }
+  | INT                         { $$ = tpat_int($1); }
+  | STR_LIT                     { $$ = tpat_str($1); }
+  | '[' ']'                     { $$ = tpat_nil(); }
   ;
 params:
     params param                { $$ = add_param($1, $2); }
