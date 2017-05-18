@@ -428,6 +428,15 @@ static void apply_theory_pat(Pattern* pat, int constraint_id, TypeExpr* theory)
             apply_theory_pat(l->pattern, constraint_id, theory);
         }
         break;
+      case PAT_CTOR_NOARG:
+        break;
+      case PAT_CTOR_WARG:
+        apply_theory_pat(pat->ctor_arg, constraint_id, theory);
+        break;
+      case PAT_INT:
+      case PAT_STR:
+      case PAT_NIL:
+        break;
     }
 }
 
@@ -585,8 +594,13 @@ static int len_typelist(int acc, TypeExprList* list)
 #define len_typelist(x) len_typelist(0, x)
 
 /*
- * Attempt to add a theory that these types are equal. Which we will later
- * try to unify
+ * Attempt to add a theory that these types are equal, which we will later
+ * try to unify.
+ * @param etype
+ *      Existing type - usually the type annotation that is already
+ *      attached to the tree. The non-solid type.
+ * @param newtype
+ *      The more solid type we have worked out applies for the expression also
  */
 static int theorise_equal(TypeExpr* etype, TypeExpr* newtype)
 {
@@ -724,6 +738,11 @@ static int count_names_pat(Pattern* pat)
       case PAT_CONS: return count_names_pat(pat->left)
                      + count_names_pat(pat->right);
       case PAT_TUPLE: return count_names_pat_list(pat->pat_list, 0);
+      case PAT_CTOR_WARG: return count_names_pat(pat->ctor_arg);
+      case PAT_CTOR_NOARG: /* fall through */
+      case PAT_INT:
+      case PAT_STR:
+      case PAT_NIL: return 0;
     }
     FAIL_MISSED_CASE();
 }
@@ -742,6 +761,13 @@ static void add_names_to_array_pat(Pattern* pat, Symbol** ptr_next)
             add_names_to_array_pat(l->pattern, ptr_next);
         }
         return;
+      case PAT_CTOR_WARG:
+        add_names_to_array_pat(pat->ctor_arg, ptr_next);
+        return;
+      case PAT_CTOR_NOARG:
+      case PAT_INT: return;
+      case PAT_STR: return;
+      case PAT_NIL: return;
     }
 }
 
@@ -876,6 +902,123 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
         } else {
             pat->type = init_type;
         }
+        break;
+      }
+      case PAT_CTOR_NOARG:
+      {
+        // Get the type that the constructor constructs:
+        struct Var* found_var = lookup_var(pat->ctor_name);
+        TypeExpr* found_type = found_var->type;
+        assert(found_type);
+        assert(solid_type(found_type));
+
+        // Check init type matches the constructors type directly
+        typexpr_conforms_or_exit(init_type, found_type, "type of pattern '%s' "
+                "does not match the type the value being matched against "
+                "constructs ", pat->ctor_name);
+        theorise_equal(init_type, found_type);
+
+        if (pat->type) {
+            typexpr_conforms_or_exit(found_type, pat->type, "type of pattern "
+                    "does not match the type which constructor '%s' "
+                    "constructs ", pat->ctor_name);
+            theorise_equal(pat->type, found_type);
+        } else {
+            pat->type = found_type;
+        }
+        break;
+      }
+      case PAT_CTOR_WARG:
+      {
+        // Do we need to check that the sub-pattern can match the type the
+        // constuctor constructs?
+        struct Var* found_var = lookup_var(pat->ctor_name);
+        TypeExpr* found_type = found_var->type;
+        assert(found_type->tag == TYPE_ARROW); // The constructor must be a fn
+
+        typexpr_conforms_or_exit(init_type, found_type->right, "type of "
+                "pattern '%s _' does not match the type the value being "
+                "matched against constructs ", pat->ctor_name);
+        theorise_equal(init_type, found_type->right);
+
+        // recurse - the ctor_arg has ctor fn param type
+        pattern_match_and_push_vars0(pat->ctor_arg, found_type->left);
+
+        if (pat->type) {
+            typexpr_conforms_or_exit(found_type->right, pat->type, "type of "
+                    "pattern does not match the type which constructor '%s' "
+                    "constructs ", pat->ctor_name);
+            theorise_equal(pat->type, found_type->right);
+        } else {
+            pat->type = found_type->right;
+        }
+        break;
+      }
+      case PAT_INT:
+      {
+        TypeExpr* int_type = lookup_typexpr(symbol("int"));
+
+        typexpr_conforms_or_exit(
+                init_type, int_type, "int literal pattern %d", pat->intval);
+
+        if (!pat->type) {
+            pat->type = int_type;
+        }
+        assert(typexpr_equals(int_type, pat->type));
+        break;
+      }
+      case PAT_STR:
+      {
+        TypeExpr* str_type = lookup_typexpr(symbol("string"));
+
+        typexpr_conforms_or_exit(init_type, str_type, "string literal pattern "
+                "\"%s\"", pat->strval);
+
+        if (!pat->type) {
+            pat->type = str_type;
+        }
+        assert(typexpr_equals(str_type, pat->type));
+        break;
+      }
+      case PAT_NIL:
+      {
+        // This needs to have the same type as the type of the match var.
+        // Just need that to be any list type
+
+        // 1. check init_type is a list type
+        init_type = deref_if_needed(init_type);
+        // Now we need to have that either init_type is a list type or a
+        // constraint type we can suggest is an
+        if (init_type->tag == TYPE_CONSTRAINT) {
+            if (!pat->type) {
+                pat->type = typeconstructor(
+                        new_type_constraint(), symbol("list"));
+            }
+            theorise_equal(init_type, pat->type);
+
+        } else if (init_type->tag == TYPE_CONSTRUCTOR
+                && init_type->constructor == symbol("list")) {
+            // This is what we hope for
+        } else {
+            tprintf(stderr,
+                    EPFX"expected list type in init for pattern %P\n", pat);
+            TypeExpr* expected = typeconstructor(
+                    typename(symbol("'a")), symbol("list"));
+            print_type_error(expected, init_type);
+            free((void*)expected->param); // cast away const :'(
+            free((void*)expected);
+            exit(EXIT_FAILURE);
+        }
+
+        if (pat->type) {
+            typexpr_conforms_or_exit(pat->type, init_type,
+                    "pattern %P in let binding", pat);
+            theorise_equal(pat->type, init_type);
+            theorise_equal(init_type, pat->type);
+        } else {
+            pat->type = init_type;
+        }
+        break;
       }
     }
 }
@@ -1457,6 +1600,11 @@ __pure static _Bool declares_name_pat(Pattern* pat, Symbol name)
             }
         }
         return 0;
+      case PAT_CTOR_WARG: return declares_name_pat(pat->ctor_arg, name);
+      case PAT_CTOR_NOARG: /* fal through */
+      case PAT_INT:
+      case PAT_STR:
+      case PAT_NIL: return 0;
     }
     FAIL_MISSED_CASE();
 }
@@ -1468,13 +1616,13 @@ __attribute__((warn_unused_result))
 __pure static _Bool declares_name(Declaration* declaration, Symbol name)
 {
     switch (declaration->tag) {
-        case DECL_RECFUNC:
-        case DECL_FUNC: return declaration->func.name == name;
-        case DECL_BIND: return declares_name_pat(
-                                declaration->binding.pattern, name);
-        case DECL_TYPE: return declaration->type.name == name;
-        case DECL_EXTERN: return declaration->ext.name == name;
-        case DECL_TYPECTOR: return declaration->ctor.name == name;
+      case DECL_RECFUNC:
+      case DECL_FUNC: return declaration->func.name == name;
+      case DECL_BIND: return declares_name_pat(
+                              declaration->binding.pattern, name);
+      case DECL_TYPE: return declaration->type.name == name;
+      case DECL_EXTERN: return declaration->ext.name == name;
+      case DECL_TYPECTOR: return declaration->ctor.name == name;
     }
     FAIL_MISSED_CASE();
 }
@@ -1482,26 +1630,31 @@ __attribute__((warn_unused_result))
 __pure static TypeExpr** decl_type_ptr_pat(Pattern* pat, Symbol name)
 {
     switch (pat->tag) {
-        case PAT_VAR:
-            if (name == pat->name) return &pat->type;
-            else return NULL;
-        case PAT_DISCARD:
-            return NULL;
-        case PAT_CONS:
-        {
-            TypeExpr** left_type = decl_type_ptr_pat(pat->left, name);
-            if (left_type) return left_type;
-            else return decl_type_ptr_pat(pat->right, name);
+      case PAT_VAR:
+        if (name == pat->name) return &pat->type;
+        else return NULL;
+      case PAT_DISCARD:
+        return NULL;
+      case PAT_CONS:
+      {
+        TypeExpr** left_type = decl_type_ptr_pat(pat->left, name);
+        if (left_type) return left_type;
+        else return decl_type_ptr_pat(pat->right, name);
+      }
+      case PAT_TUPLE:
+      {
+        for (PatternList* pl = pat->pat_list; pl; pl = pl->next) {
+            TypeExpr** ptype = decl_type_ptr_pat(pl->pattern, name);
+            if (ptype)
+                return ptype;
         }
-        case PAT_TUPLE:
-        {
-            for (PatternList* pl = pat->pat_list; pl; pl = pl->next) {
-                TypeExpr** ptype = decl_type_ptr_pat(pl->pattern, name);
-                if (ptype)
-                    return ptype;
-            }
-            return NULL;
-        }
+        return NULL;
+      }
+      case PAT_CTOR_WARG: return decl_type_ptr_pat(pat->ctor_arg, name);
+      case PAT_CTOR_NOARG: /* fal through */
+      case PAT_INT:
+      case PAT_STR:
+      case PAT_NIL: return 0;
     }
     FAIL_MISSED_CASE();
 }
@@ -1845,6 +1998,14 @@ static _Bool check_if_fully_typed_pattern(Pattern* pat, SymList* hierachy)
         for (PatternList* l = pat->pat_list; l; l = l->next) {
             result &= check_if_fully_typed_pattern(l->pattern, hierachy);
         }
+        break;
+      case PAT_CTOR_WARG:
+        result &= check_if_fully_typed_pattern(pat->ctor_arg, hierachy);
+        break;
+      case PAT_CTOR_NOARG:
+      case PAT_INT:
+      case PAT_STR:
+      case PAT_NIL:
         break;
     }
     return result;

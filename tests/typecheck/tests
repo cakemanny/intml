@@ -178,6 +178,26 @@ expect_pass "type dice = Heads | Tails  let id (x : dice) = x"
 expect_pass "type dice = Heads | Tails  let ishead x = if x = Heads then 1 else 0"
 expect_fail "type dice = Heads | Tails  type bool = False | True  let x = Heads = True"
 
+# matching tagged types
+expect_pass "type dice = Heads | Tails  let ishead x = match x with Heads -> 1 | Tails -> 0"
+expect_pass "type tree = Node of tree * tree | Leaf of int
+let rec sum_leaves t = match t with
+| Node (left, right) -> sum_leaves left + sum_leaves right
+| Leaf value -> value
+"
+
+# matching value types
+expect_pass "let 1 = 1"
+expect_pass "let 1 = 0"
+expect_fail 'let 1 = "hi"'
+expect_fail 'let 1 = []'
+expect_pass 'let [] = [1]'
+expect_fail 'let "hi" :: [] = [1]'
+expect_pass 'let "hi" = "hi"'
+expect_pass 'let "hi" = "ho"'
+expect_fail 'let "hi" = 1'
+
+
 if [[ $failures == 1 ]]; then
     echo 1 failure
 else
