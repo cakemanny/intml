@@ -152,6 +152,19 @@ expect2 "let main () = [0] = [1]" 0
 expect2 "let main () = [0;1] = [0;1]" 1
 expect2 "let main () = [0;1] = [1;0]" 0
 
+# value matching
+expect2 "let main () = match 0 with 0 -> 0" 0
+expect2 "let main () = match 1 with 1 -> 0" 0
+expect2 "let main () = match 0 with 1 -> 0 | _ -> 10" 10
+expect2 "let main () = match 1 with 0 -> 0 | _ -> 10" 10
+expect2 "let main () = match 0 with 2 -> 0 | _ -> 10" 10
+expect2 "let main () = match 1 with 2 -> 0 | _ -> 10" 10
+expect2 "let main () = match 2 with 2 -> 0" 0
+expect2 "let main () = match ([] : int list) with [] -> 0" 0
+expect2 "let main () = match [1] with [] -> 0 | 1 :: [] -> 1" 1
+expect2 "let main () = match [1] with [] -> 0 | x :: [] -> x" 1
+expect2 "let main () = match [2] with [] -> 0 | x :: [] -> x" 2
+
 # Exit with the number of failing tests
 exit $exitcode
 

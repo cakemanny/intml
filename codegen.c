@@ -640,6 +640,19 @@ static void b(int label)
         fprintf(cgenout, "\tb\tL%d\n", label);
     #endif
 }
+
+// These work fine on arm but not on x86
+#ifdef __arm__
+static void moveq_imm(reg dst, int intval)
+{
+    ins2_imm_rtl("moveq", dst, intval);
+}
+static void movne_imm(reg dst, int intval)
+{
+    ins2_imm_rtl("movne", dst, intval);
+}
+#endif // __arm__
+
 static void call_reg(reg op)
 {
     #ifdef __x86_64__
@@ -1023,6 +1036,72 @@ static void gen_sm_unapply_pat(Pattern* pat)
         for (int i = 0, n = stack_size >> word_size_ctz; i < n; i++) {
             pop(rs[i]); // Restore r12-r15 per constract
         }
+        break;
+      }
+      case PAT_CTOR_NOARG:
+      {
+        // This should be the same as int comparison but just
+        // for the given tag value... (which we need to work out)
+        dbg_comment("Compare constructor %s", pat->ctor_name);
+        assert(0 && "TODO");
+        break;
+      }
+      case PAT_CTOR_WARG:
+      {
+        // Check the constructor tag. If it matches then recurse on the
+        // subpattern
+        dbg_comment("Compare constructor %s", pat->ctor_name);
+        assert(0 && "TODO");
+        break;
+      }
+      case PAT_INT:
+      {
+        // If r0 is equal to the literal value, then 1 else 0
+        #ifdef __arm__
+            // Special cases, pattern is 1 or 0:
+            if (pat->intval == 0) {
+                cmp_imm(r0, 0LL);
+                moveq_imm(r0, 1LL);
+                movne_imm(r0, 0LL);
+            } else if (pat->intval != 1) {
+                // This might actually work in the general case...
+                cmp_imm(r0, pat->intval);
+                movne_imm(r0, 0LL);
+                // if they are equal, leave the value in place since truthy
+            }
+        #else
+            // general case
+            cmp_imm(r0, pat->intval);
+            mov_imm(r0, 0LL);
+            int end = request_label();
+            bne(end);
+            mov_imm(r0, 1LL); // if so, skip this instruction
+            label(end);
+        #endif
+        break;
+      }
+      case PAT_STR:
+      {
+        // 1. Intern the string constant
+        // 2. strcmp?
+        assert(0 && "TODO");
+        break;
+      }
+      case PAT_NIL:
+      {
+        // I'm sure this could probably be done in a single instruction....
+        cmp_imm(r0, 0LL); // Check-null phead==0 => empty
+        #ifdef __arm__
+            moveq_imm(r0, 1LL);
+            movne_imm(r0, 0LL);
+        #else
+            int end = request_label();
+            mov_imm(r0, 1LL); // Assume they are equal
+            beq(end);
+            mov_imm(r0, 0LL); // But if the are not, then execute this instruction
+            label(end);
+        #endif // __arm__
+        break;
       }
     }
 }
@@ -1623,6 +1702,14 @@ static void calculate_activation_records_pat(Pattern* pat, Function* curr_func)
         for (PatternList* l = pat->pat_list; l; l = l->next) {
             calculate_activation_records_pat(l->pattern, curr_func);
         }
+        break;
+      case PAT_CTOR_WARG:
+        calculate_activation_records_pat(pat->ctor_arg, curr_func);
+        break;
+      case PAT_CTOR_NOARG: /* fal through */
+      case PAT_INT:
+      case PAT_STR:
+      case PAT_NIL: break;
     }
 }
 
