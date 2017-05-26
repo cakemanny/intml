@@ -164,6 +164,10 @@ expect2 "let main () = match ([] : int list) with [] -> 0" 0
 expect2 "let main () = match [1] with [] -> 0 | 1 :: [] -> 1" 1
 expect2 "let main () = match [1] with [] -> 0 | x :: [] -> x" 1
 expect2 "let main () = match [2] with [] -> 0 | x :: [] -> x" 2
+expect2 "type bool = F | T  let main () = match T with T -> 1 | F -> 0" 1
+expect2 "type bool = F | T  let main () = match F with T -> 1 | F -> 0" 0
+expect2 "type bool = F | T of int  let main () = match F with T _ -> 1 | F -> 0" 0
+expect2 "type bool = F | T of int  let main () = match T 2 with T 1 -> 1 | T 2 -> 2 | F -> 0" 2
 
 # Exit with the number of failing tests
 exit $exitcode

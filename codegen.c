@@ -151,7 +151,10 @@ static struct TypeSize {
     Symbol name;
     size_t size;
 } type_sizes[TYPE_NAMES_MAX];
-int type_sizes_count = 0;
+static int type_sizes_count = 0;
+
+static Declaration* tagged_decls[TYPE_NAMES_MAX];
+static int tagged_decls_count = 0;
 
 /* Some pre-declarations */
 static size_t stack_size_of_type(TypeExpr* type);
@@ -931,6 +934,26 @@ static void gen_list_from_end(ExprList* list, int node_size)
     }
 }
 
+int ctor_tag_value(Symbol ctor_name, Symbol type_name)
+{
+    for (int i = 0; i < tagged_decls_count; i++) {
+        if (type_name == tagged_decls[i]->ctor.name) {
+            CtorList* ctors = tagged_decls[i]->ctor.ctors;
+            int tag_val = 0;
+            for (CtorList* l = ctors; l; l = l->next) {
+                if (l->ctor->name == ctor_name) {
+                    return tag_val;
+                }
+                tag_val++;
+            }
+            break;
+        }
+    }
+    fprintf(stderr, "constructor: %s : %s\n", ctor_name, type_name);
+    assert(0 && "constructor tag not found");
+    abort();
+}
+
 /*
  * Given the result of an expression on the stack, decompose and extract the
  * values into the stack locations for the variables as declared in the
@@ -1042,16 +1065,46 @@ static void gen_sm_unapply_pat(Pattern* pat)
       {
         // This should be the same as int comparison but just
         // for the given tag value... (which we need to work out)
-        dbg_comment("Compare constructor %s", pat->ctor_name);
-        assert(0 && "TODO");
+        dbg_comment("PAT_CTOR_NOARG: Compare constructor %s", pat->ctor_name);
+
+        // We should probably implement this by putting the ctors in table
+        // and tagging with an ID
+        assert(pat->type->tag == TYPE_NAME);
+        int tag_val = ctor_tag_value(pat->ctor_name, pat->type->name);
+        // Should we synthesise a PAT_INT and recurse instead?
+
+        cmp_imm(r0, tag_val);
+        mov_imm(r0, 0LL);
+        int end = request_label();
+        bne(end);
+        mov_imm(r0, 1LL); // if so, skip this instruction
+        label(end);
         break;
       }
       case PAT_CTOR_WARG:
       {
-        // Check the constructor tag. If it matches then recurse on the
+        // Check the constructor tag. If it matches then
+        // shift the data left in the registers and recurse on the
         // subpattern
-        dbg_comment("Compare constructor %s", pat->ctor_name);
-        assert(0 && "TODO");
+        dbg_comment("PAT_CTOR_WARG: Compare constructor %s", pat->ctor_name);
+        assert(pat->type->tag == TYPE_NAME);
+        int tag_val = ctor_tag_value(pat->ctor_name, pat->type->name);
+        cmp_imm(r0, tag_val);
+        mov_imm(r0, 0LL);
+        int end = request_label();
+        bne(end);
+        // We match - Now check the subpattern!
+        switch (stack_size_of_type(pat->ctor_arg->type)) {
+          case 3 * WORD_SIZE: mov(r0, r1); mov(r1, r2); mov(r2, r3); break;
+          case 2 * WORD_SIZE: mov(r0, r1); mov(r1, r2); break;
+          case 1 * WORD_SIZE: mov(r0, r1); break;
+          case 0 * WORD_SIZE: mov_imm(r0, 1LL); break; // not sure we need this...
+          default: assert(0 && "TODO: larger sizes"); break;
+        }
+        // Check the pattern the ctor is applied to
+        gen_sm_unapply_pat(pat->ctor_arg);
+
+        label(end);
         break;
       }
       case PAT_INT:
@@ -2125,7 +2178,11 @@ static void add_custom_type_sizes(DeclarationList* root)
                   }
                 }
             }
-            add_type_size(decl->type.name, size_of_tag + size_of_data);
+            add_type_size(decl->ctor.name, size_of_tag + size_of_data);
+
+            // keep track of these for use in patterns in the unapply
+            // code
+            tagged_decls[tagged_decls_count++] = decl;
             break;
           }
         }
