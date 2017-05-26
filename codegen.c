@@ -1208,9 +1208,8 @@ static void gen_stack_machine_code(Expr* expr)
         case LESSEQUAL:
         {
             gen_sm_binop(expr);
-            mov(t1, r0);
+            cmp(t0, r0);
             mov_imm(r0, 0LL);
-            cmp(t0, t1);
             int end = request_label();
             if (expr->tag == LESSTHAN)          bge(end); // invert each cond
             else if (expr->tag == LESSEQUAL)    bgt(end);
@@ -1222,9 +1221,8 @@ static void gen_stack_machine_code(Expr* expr)
         case EQUAL:
         {
             gen_sm_binop(expr); // only will work for single word values
-            mov(r2, r0);
+            cmp(t0, r0);
             mov_imm(r0, 0LL);
-            cmp(t0, r2);
             int end = request_label();
             bne(end);
             if (stack_size_of_type(expr->left->type) > WORD_SIZE) {
