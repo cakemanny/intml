@@ -996,8 +996,13 @@ static void gen_sm_unapply_pat(Pattern* pat)
 
         // Load head data
         mov(t0, r0);
-        mov(t1, r0);
-        add_imm(t1, WORD_SIZE);
+        #ifdef __x86_64__
+            fprintf(cgenout, "	leaq	%lu(%s), %s\n", WORD_SIZE, r0, t1);
+        #else
+            // would like to do multiple load w/offset below
+            mov(t1, r0);
+            add_imm(t1, WORD_SIZE);
+        #endif
         switch (stack_size_of_type(pat->left->type)) {
           case 4 * WORD_SIZE:   load4(t1, r0, r1, r2, r3); break;
           case 3 * WORD_SIZE:   load3(t1, r0, r1, r2); break;
