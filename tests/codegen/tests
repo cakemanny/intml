@@ -169,6 +169,14 @@ expect2 "type bool = F | T  let main () = match F with T -> 1 | F -> 0" 0
 expect2 "type bool = F | T of int  let main () = match F with T _ -> 1 | F -> 0" 0
 expect2 "type bool = F | T of int  let main () = match T 2 with T 1 -> 1 | T 2 -> 2 | F -> 0" 2
 
+# string patterns
+expect2 'let main () = match "a" with "a" -> 1 | _ -> 0' 1
+expect2 'let main () = match "a" with "x" -> 1 | _ -> 0' 0
+expect2 'let main () = match "ab" with "ab" -> 1 | _ -> 0' 1
+expect2 'let main () = match "ab" with "ax" -> 1 | _ -> 0' 0
+expect2 'let main () = match "012345678" with "012345678" -> 1 | _ -> 0' 1
+expect2 'let main () = match "012345678" with "0123456x8" -> 1 | _ -> 0' 0
+
 # Exit with the number of failing tests
 exit $exitcode
 

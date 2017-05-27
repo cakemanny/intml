@@ -438,6 +438,18 @@ static void loadc(reg dst, reg src, int off, const char* comment)
         else fputs("\n", cgenout);
     #endif
 }
+
+static void load_regoff(reg dst, reg src, reg off, _Bool negoff)
+{
+    #ifdef __x86_64__
+        char* sign = negoff ? "-1" : "1";
+        fprintf(cgenout,"	movq	(%s, %s, %s), %s\n", off, src, sign, dst);
+    #else
+        char* sign = negoff ? "-" : "";
+        fprintf(cgenout, "	ldr	%s, [%s, %s%s]\n", dst, src, sign, off);
+    #endif
+}
+
 static void load(reg dst, reg src, int off)
 {
     loadc(dst, src, off, NULL);
@@ -655,6 +667,16 @@ static void movne_imm(reg dst, int intval)
     ins2_imm_rtl("movne", dst, intval);
 }
 #endif // __arm__
+
+static void movne(reg dst, reg src)
+{
+    #ifdef __x86_64__
+        ins2("cmovneq", src, dst);
+    #else
+        ins2("movne", dst, src);
+    #endif
+}
+
 
 static void call_reg(reg op)
 {
@@ -1140,9 +1162,74 @@ static void gen_sm_unapply_pat(Pattern* pat)
       }
       case PAT_STR:
       {
-        // 1. Intern the string constant
-        // 2. strcmp?
-        assert(0 && "TODO");
+        int len = strlen(pat->strval);
+        mov_imm(t0, len);
+        // compare lengths
+        cmp(r0, t0);
+        mov_imm(r0, 0LL); // load false result to return if not equal
+        int match_end = request_label();
+        bne(match_end);
+
+        // Now compare the actual data
+        load_tmplabel(t1, label_for_str_or_add(pat->strval));
+        // Save the argument string address into t0, so we can do multi-load
+        // into r0,r1,r2,r3
+        mov(t0, r1);
+
+        int num_words = (len + (WORD_SIZE - 1))/WORD_SIZE;
+        // Compare up to 8 words at a time?
+        if (num_words <= 8) {
+            // Since we have .p2align directive on the strings, should
+            // get zeroes for the extra bytes
+            mov_imm(r0, 1LL);
+            for (int i = 0; i < num_words; i++) {
+                loadc(r1, t0, i * WORD_SIZE, "word from arg");
+                loadc(r2, t1, i * WORD_SIZE, "word from pat");
+                if (i == (num_words - 1)) {
+                    // mask off any extra bytes?
+                    int excess = (num_words * WORD_SIZE) - len;
+                    if (excess != 0) {
+                        // TODO! // Only necessary if our allocator doesn't
+                        // zero out memory
+                    }
+                }
+                cmp(r1, r2);
+                #ifdef __arm__
+                    movne_imm(r0, 0LL);
+                #else
+                    mov_imm(r1, 0LL);
+                    movne(r0, r1);
+                #endif
+            }
+        } else {
+            int loop_head = request_label();
+            int no_match = request_label();
+            // Need to loop this shit
+            // This should almost definitely be a procedure call
+            mov_imm(r0, 0LL); // offset
+            mov_imm(r3, (len + WORD_SIZE - 1) / WORD_SIZE); // loop counter
+            // have t0 and t1 be the end of the string a
+            label(loop_head);
+
+            load_regoff(r1, t0, r0, 0);
+            load_regoff(r2, t1, r0, 0);
+            cmp(r1, r2);
+            bne(no_match);
+
+            add_imm(r0, WORD_SIZE);
+            sub_imm(r3, 1LL); // This sets the flags
+            //cmp_imm(r3, 0LL); // so don't need this
+            bne(loop_head);
+            // If we get here, then the strings matched
+
+            // match
+            mov_imm(r0, 1LL);
+            b(match_end);
+            label(no_match);
+            mov_imm(r0, 0LL);
+        }
+
+        label(match_end);
         break;
       }
       case PAT_NIL:
