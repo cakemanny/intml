@@ -43,7 +43,7 @@ test: tests $(TARGETS)
 %.s: %.ml ../../intml
 	../../intml -o $@ $<
 
-%: %.o
+%: %.o ../../runtime.a
 	$(LD) $(LDFLAGS) -o $@ $< ../../runtime.a $(LDLIBS)
 
 .PHONY: clean
