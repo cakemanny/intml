@@ -35,7 +35,7 @@ test: tests $(TARGETS)
 %.exe: %.ml
 	../../intml -o $(basename $<).s $<
 	as -o $(basename $<).o $(basename $<).s
-	$(LD) $(LDFLAGS) -o $@ $(basename $<).o $(LDLIBS)
+	$(LD) $(LDFLAGS) -o $@ $(basename $<).o ../../runtime.a $(LDLIBS)
 
 %.o: %.s
 	as -o $@ $<
@@ -44,7 +44,7 @@ test: tests $(TARGETS)
 	../../intml -o $@ $<
 
 %: %.o
-	$(LD) $(LDFLAGS) -o $@ $< $(LDLIBS)
+	$(LD) $(LDFLAGS) -o $@ $< ../../runtime.a $(LDLIBS)
 
 .PHONY: clean
 

@@ -699,18 +699,18 @@ static void alloc(int size)
     // We will need to abstract out the (calling a function) idea at some point
 #if defined(__APPLE__) && defined(__x86_64__)
     mov_imm("%rdi", size);
-    call("_malloc");
+    call("_ml_gc_alloc");
 #elif defined(__linux__) && defined(__x86_64__)
     mov_imm("%rdi", size);
-    call("malloc");
+    call("ml_gc_alloc");
 #elif defined(__linux__) && defined(__arm__)
     mov_imm(r0, size);
-    call("malloc");
+    call("ml_gc_alloc");
 #elif defined(_WIN32) && defined(__x86_64__)
     // allocate shadow space
     ins2("subq", "$32", sp);
     mov_imm("%rcx", size);
-    call("malloc");
+    call("ml_gc_alloc");
     ins2("addq", "$32", sp);
 #else
 #   error "Unknown platform"

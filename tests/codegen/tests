@@ -43,7 +43,7 @@ expect2 () {
     stmp=$(mktemp)
     otmp=$(mktemp)
     if (echo "$code" | $intml -o $stmp -); then
-        as -o $otmp $stmp && ${LD} ${LDFLAGS} -o a.out $otmp ${LDLIBS}
+        as -o $otmp $stmp && ${LD} ${LDFLAGS} -o a.out $otmp ../../runtime.a ${LDLIBS}
         ./a.out
         result=$?
         if [[ $result == $2 ]]; then

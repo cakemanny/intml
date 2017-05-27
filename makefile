@@ -7,6 +7,8 @@ CFLAGS=-std=gnu11 -g -Wall -fno-omit-frame-pointer
 LDLIBS=
 LDFLAGS=
 
+RTCFLAGS=-std=gnu11 -Wall -fno-omit-frame-pointer
+
 ifndef NDEBUG
   ifneq "$(OS)" "Windows_NT"
     CFLAGS += -fsanitize=address
@@ -29,6 +31,10 @@ SRC=ast.h codegen.h grammar.y lexer.l symbols.h \
 # deps for the final binary
 OSRC=grammar.tab.c lex.yy.c $(BSRC)
 
+TARGETS := intml runtime.a
+
+all: $(TARGETS)
+
 # Use default rule...
 intml: $(OSRC:.c=.o)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
@@ -38,6 +44,12 @@ grammar.tab.h grammar.tab.c: grammar.y
 
 lex.yy.c: lexer.l grammar.tab.h
 	$(LEX) $(LFLAGS) $<
+
+runtime.a: runtime.o
+	$(AR) -r $@ $^
+
+runtime.o: runtime.c
+	$(CC) $(RTCFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c -o $@ $<
 
 %.o: %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(TARGET_ARCH) -c -o $@ $<

@@ -6,6 +6,7 @@ intml
 lex.yy.*
 *.output
 grammar.tab.*
+runtime.a
 # depfiles
 *.d
 
