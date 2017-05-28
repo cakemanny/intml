@@ -293,14 +293,16 @@ static void add_var_to_locals(Function* func, Symbol name, TypeExpr* type, Funct
      */
     Var* begin = variable_stack + func->var_stack_start;
     Var* end = var_stack_ptr;
-    int stack_offset = WORD_SIZE // Saved base pointer value
+    int stack_offset = -WORD_SIZE // Saved base pointer value
         // Result
-        + stack_size_of_type(func->type->right)
+        - stack_size_of_type(func->type->right)
         // &Closure
-        + WORD_SIZE;
+        - WORD_SIZE;
     for (Var* it = begin; it != end; ++it) {
-        stack_offset += stack_size_of_type(it->type);
+        stack_offset -= stack_size_of_type(it->type);
     }
+    // point at the first word of the data
+    stack_offset -= (stack_size_of_type(type) - WORD_SIZE);
 
     variable_table[var_table_count++] = (VarEx) {
         .name = name,
@@ -450,6 +452,23 @@ static inline void sub_imm(reg dst, long long amount)
         ins2_imm_rtl("sub", dst, amount);
     #endif
 }
+
+static void mov(reg dst, reg src);
+
+static void sub_imm2(reg dst, reg minuend, int immediate)
+{
+    #ifdef __x86_64__
+        if (dst == minuend) {
+            sub_imm(dst, immediate);
+        } else {
+            mov(dst, minuend);
+            sub_imm(dst, immediate);
+        }
+    #else
+        fprintf(cgenout, "	sub	%s, %s, #%d", dst, minuend, immediate);
+    #endif
+}
+
 // load but with a comment to help debugging
 static void loadc(reg dst, reg src, int off, const char* comment)
 {
@@ -509,14 +528,51 @@ static void load4(reg base, reg op0, reg op1, reg op2, reg op3)
         fprintf(cgenout, "	ldm	%s, {%s,%s,%s,%s}\n", base, op0, op1, op2, op3);
     #endif
 }
+
 static void store(int off, reg dst, reg src)
 {
     #ifdef __x86_64__
         fprintf(cgenout,"\tmovq\t%s, %d(%s)\n", src, off, dst);
     #else
+        // TODO: need to handle case where offset is not a rotated byte
         fprintf(cgenout, "	str	%s, [%s, #%d]\n", src, dst, off);
     #endif
 }
+
+static void store2(reg base, reg op0, reg op1)
+{
+    #ifdef __x86_64__
+        store(0 * WORD_SIZE, base, op0);
+        store(1 * WORD_SIZE, base, op1);
+    #else
+        fprintf(cgenout, "	stm	%s, {%s, %s}\n", base, op0, op1);
+    #endif
+}
+
+static void store3(reg base, reg op0, reg op1, reg op2)
+{
+    #ifdef __x86_64__
+        store(0 * WORD_SIZE, base, op0);
+        store(1 * WORD_SIZE, base, op1);
+        store(2 * WORD_SIZE, base, op2);
+    #else
+        fprintf(cgenout, "	stm	%s, {%s, %s, %s}\n", base, op0, op1, op2);
+    #endif
+}
+
+static void store4(reg base, reg op0, reg op1, reg op2, reg op3)
+{
+    #ifdef __x86_64__
+        store(0 * WORD_SIZE, base, op0);
+        store(1 * WORD_SIZE, base, op1);
+        store(2 * WORD_SIZE, base, op2);
+        store(3 * WORD_SIZE, base, op3);
+    #else
+        fprintf(cgenout, "	stm	%s, {%s, %s, %s, %s}\n",
+                base, op0, op1, op2, op3);
+    #endif
+}
+
 static void mov_imm(reg dst, long long intval)
 {
     #ifdef __x86_64__
@@ -801,7 +857,7 @@ static int closure_offset(Function* func)
 }
 static int argument_offset(Function* func)
 {
-    return closure_offset(func) - WORD_SIZE;
+    return closure_offset(func) - stack_size_of_type(func->type->left);
 }
 
 __attribute__((malloc))
@@ -843,11 +899,21 @@ static void emit_fn_prologue(Function* func)
     #endif
     sub_imm(sp, stack_required(func));
     // Move ptr to closure into stack location
-    store(closure_offset(func), bp, r1);
-    if (stack_size_of_type(func->type->left) > 0) {
-        store(argument_offset(func), bp, r2);
-        if (stack_size_of_type(func->type->left) > WORD_SIZE) {
-            store(argument_offset(func) - WORD_SIZE, bp, r3);
+    if (closure_size(func) > 0) {
+        store(closure_offset(func), bp, r1);
+    }
+    int ssot_arg = stack_size_of_type(func->type->left);
+    if (ssot_arg > 0) {
+        if (ssot_arg == WORD_SIZE) {
+            store(argument_offset(func), bp, r2);
+        } else if (ssot_arg == 2 * WORD_SIZE) {
+            store(argument_offset(func), bp, r2);
+            store(argument_offset(func) + WORD_SIZE, bp, r3);
+        }  else if (ssot_arg > 2 * WORD_SIZE) {
+            // FIXME: do something here...
+            fprintf(stderr, "TODO: support larger args sizes\n");
+            store(argument_offset(func), bp, r2);
+            store(argument_offset(func) + WORD_SIZE, bp, r3);
         }
     }
 }
@@ -966,8 +1032,7 @@ static void gen_list_from_end(ExprList* list, int node_size)
 
         pop2(t0, t1);
         // copy the data to memory
-        store(0, r0, t0);
-        store(WORD_SIZE, r0, t1);
+        store2(r0, t0, t1);
 
         if (node_size >= 3 * WORD_SIZE) {
             pop2(t0, t1);
@@ -1015,11 +1080,20 @@ static void gen_sm_unapply_pat(Pattern* pat)
       {
         const VarEx var = variable_table[pat->var_id];
         switch (var.size) { // These are meant to fall through
-          case 4 * WORD_SIZE:   store(-var.stack_offset - 3 * WORD_SIZE, bp, r3);
-          case 3 * WORD_SIZE:   store(-var.stack_offset - 2 * WORD_SIZE, bp, r2);
-          case 2 * WORD_SIZE:   store(-var.stack_offset - WORD_SIZE, bp, r1);
-          case WORD_SIZE:       store(-var.stack_offset, bp, r0); // Store r0 into stack
-          case 0:               break;
+          case 4 * WORD_SIZE:
+              sub_imm2(t0, bp, -var.stack_offset);
+              store4(t0, r0, r1, r2, r3);
+              break;
+          case 3 * WORD_SIZE:
+              sub_imm2(t0, bp, -var.stack_offset);
+              store3(t0, r0, r1, r2);
+              break;
+          case 2 * WORD_SIZE:
+              store(var.stack_offset, bp, r0);
+              store(var.stack_offset + WORD_SIZE, bp, r1);
+              break;
+          case WORD_SIZE: store(var.stack_offset, bp, r0); // Store r0 into stack
+          case 0: break;
           default:
             assert(0 && "TODO: deal with larger variables");
             break;
@@ -1427,13 +1501,16 @@ static void gen_stack_machine_code(Expr* expr)
                     char* pfn; asprintf(&pfn, "var %s local word 1", var.name);
                     // Should currently we are ordering struct members
                     // downwards... should we?
-                    loadc(r0, bp, -var.stack_offset, pfn); // Load word into r0
+                    loadc(r0, bp, var.stack_offset, pfn); // Load word into r0
                     if (var.size > WORD_SIZE) {
                         char* pfn2; asprintf(&pfn2, "var %s local word 2",
                                 var.name);
                         // load subsequent word into r1 for "return"
-                        loadc(r1, bp, -var.stack_offset - WORD_SIZE, pfn2);
+                        loadc(r1, bp, var.stack_offset + WORD_SIZE, pfn2);
                         free(pfn2);
+                        if (var.size > 2 * WORD_SIZE) {
+                            fprintf(stderr, "TODO: VAR: larger var sizes\n");
+                        }
                     }
                     free(pfn);
                 }
@@ -1456,13 +1533,21 @@ static void gen_stack_machine_code(Expr* expr)
                 // load address of our closure
                 loadc(t0, bp, closure_offset(curr_func), "addr closure");
                 // load the value from closure memory
-                char* pfn; asprintf(&pfn, "var %s closure word 1", expr->var);
-                loadc(r0, t0, pos, pfn);
-                pfn[strlen(pfn)-1] = '2';
-                if (stack_size_of_type(expr->type) > WORD_SIZE) {
-                    loadc(r1, t0, pos + WORD_SIZE, pfn);
+                int ssot = stack_size_of_type(expr->type);
+                if (ssot <= WORD_SIZE) {
+                    char* pfn; asprintf(&pfn, "var %s word 1", expr->var);
+                    loadc(r0, t0, pos, pfn);
+                    free(pfn);
+                } else {
+                    add_imm(t0, pos);
+                    switch (ssot) {
+                        case 2 * WORD_SIZE: load2(t0, r0, r1); break;
+                        case 3 * WORD_SIZE: load3(t0, r0, r1, r2); break;
+                        case 4 * WORD_SIZE: load4(t0, r0, r1, r2, r3); break;
+                        default: assert(0 && "TODO: VAR: larger var sizes");
+                                 break;
+                    }
                 }
-                free(pfn);
             }
             break;
         }
@@ -1502,13 +1587,13 @@ static void gen_stack_machine_code(Expr* expr)
             const VarEx varx = variable_table[expr->func.var_id];
             char* lbl = function_label(func);
             load_label(r0, lbl);
-            store(-varx.stack_offset, bp, r0);
+            store(varx.stack_offset, bp, r0);
             free(lbl);
             // allocate closure, fill it and store in correct location
             if (closure_size(func) > 0) {
                 // Reduce stack usage, use callee-saved %r12
                 alloc(closure_size(func));  // Address in r0
-                store(-varx.stack_offset - WORD_SIZE, bp, r0); // Save Address
+                store(varx.stack_offset + WORD_SIZE, bp, r0); // Save Address
                 push2(cs0, cs1);
                 mov(cs0, r0); // But also put somewhere useful too
 
@@ -1669,7 +1754,7 @@ static void gen_stack_machine_code(Expr* expr)
         {
             const VarEx varx = variable_table[expr->ext.var_id];
             load_label(r0, expr->ext.external_name);
-            store(-varx.stack_offset, bp, r0);
+            store(varx.stack_offset, bp, r0);
 
             gen_stack_machine_code(expr->ext.subexpr);
             break;
