@@ -1384,7 +1384,7 @@ static void gen_stack_machine_code(Expr* expr)
                 if (expr->dc_var_id >= 0) {
                     varnode->var_id = expr->dc_var_id;
                 } else {
-                    varnode->function_id = expr->dc_closingfunc_id;
+                    varnode->enclosing_func_id = expr->dc_closingfunc_id;
                 }
                 gen_stack_machine_code(varnode);
                 free(varnode);
@@ -1438,10 +1438,10 @@ static void gen_stack_machine_code(Expr* expr)
                     free(pfn);
                 }
             } else {
-                assert(expr->function_id != -1);
+                assert(expr->enclosing_func_id != -1);
                 // We are in closure land
                 // What function are we in?
-                Function* curr_func = function_table + expr->function_id;
+                Function* curr_func = function_table + expr->enclosing_func_id;
                 int pos = 0;
                 for (ParamList* c = curr_func->closure; c; c = c->next) {
                     Param* param = c->param;
@@ -1521,7 +1521,7 @@ static void gen_stack_machine_code(Expr* expr)
                     if (c->param->var_id >= 0) {
                         varnode->var_id = c->param->var_id;
                     } else {
-                        varnode->function_id = -1 - c->param->var_id;
+                        varnode->enclosing_func_id = -1 - c->param->var_id;
                     }
                     gen_stack_machine_code(varnode); // Load value into r0,r1
                     free(varnode);
@@ -1949,7 +1949,7 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
             // which does not contain the variable
             add_var_to_closure(curr_func, expr->var, expr->type);
             // tag the function to find the closure it will be found in
-            expr->function_id = fn_table_count - 1;
+            expr->enclosing_func_id = fn_table_count - 1;
         } else {
             // Tag the var with the var_id
             expr->var_id = var->var_id;
@@ -2127,7 +2127,7 @@ static void patch_in_direct_calls(Expr* expr, Var* var_stack_ptr)
                 expr->funcname = left->var;
                 expr->dc_var_id = left->var_id; // These shouldn't have
                 // actually been set yet...
-                expr->dc_closingfunc_id = left->function_id;
+                expr->dc_closingfunc_id = left->enclosing_func_id;
                 expr->args = add_expr(exprlist(), right);
                 expr->dc_func_id = -1; // we don't know yet
                 // type will stay the same

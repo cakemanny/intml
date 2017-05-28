@@ -193,7 +193,7 @@ struct Expr {
         struct {
             Symbol  var;        /* VAR */
             int     var_id; // tag variables as they are used in the program text
-            int     function_id; // tag function that closes the variable
+            int     enclosing_func_id; // tag function that closes the variable
         };
         int         intval;     /* INTVAL */
         Symbol      strval;     /* STRVAL */

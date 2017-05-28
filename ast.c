@@ -253,7 +253,7 @@ Expr* var(Symbol name)
     Expr* result = expr(VAR);
     result->var = name;
     result->var_id = -1;
-    result->function_id = -1;
+    result->enclosing_func_id = -1;
     return result;
 }
 
