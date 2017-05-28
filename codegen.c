@@ -465,7 +465,7 @@ static void sub_imm2(reg dst, reg minuend, int immediate)
             sub_imm(dst, immediate);
         }
     #else
-        fprintf(cgenout, "	sub	%s, %s, #%d", dst, minuend, immediate);
+        fprintf(cgenout, "	sub	%s, %s, #%d\n", dst, minuend, immediate);
     #endif
 }
 
