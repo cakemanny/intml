@@ -1263,7 +1263,7 @@ static void gen_sm_binop_r(Expr* expr)
     gen_stack_machine_code(expr->right);    // right expression into r0
     push2(r0, r1);                           // save r0
     gen_stack_machine_code(expr->left);     // left expression into r0
-    pop2(t0, r1);                            // right expr into t0
+    pop2(t0, t1);                            // right expr into t0
 }
 static void gen_stack_machine_code(Expr* expr)
 {
@@ -1288,13 +1288,12 @@ static void gen_stack_machine_code(Expr* expr)
             break;
         case DIVIDE:
             gen_sm_binop_r(expr);
-#ifdef __x86_64__
-            fprintf(cgenout, "\txorq\t%s, %s\n", "%rdx", "%rdx");
-            ins1("idiv", t0);
-#else
-            assert(0 && "TODO: division on arm");
-            mov_imm(r0, 0LL);
-#endif
+            #ifdef __x86_64__
+                fprintf(cgenout, "\txorq\t%s, %s\n", "%rdx", "%rdx");
+                ins1("idiv", t0);
+            #else
+                ins3("sdiv", r0, r0, t0);
+            #endif
             break;
         case LESSTHAN:
         case LESSEQUAL:
