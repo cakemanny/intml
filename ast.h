@@ -183,6 +183,7 @@ struct Expr {
         TUPLE,
         EXTERN_EXPR, /* not in the language - just for codegen */
         MATCH_EXPR,
+        DIRECT_CALL, /* codgen only! */
     }               tag;
     union {
         struct { /* PLUS - APPLY */
@@ -208,6 +209,13 @@ struct Expr {
         struct { /* MATCH_EXPR */
             Expr* matchexpr;
             CaseList* cases;
+        };
+        struct { /* DIRECT_CALL */
+            Symbol  funcname;
+            int     dc_var_id;
+            int     dc_closingfunc_id;
+            ExprList*   args;
+            int     dc_func_id;
         };
     };
     /* We will want to be able to type all our expressions */
@@ -543,6 +551,11 @@ Expr* local_extern(
  * Creates a match expression node
  */
 Expr* match(Expr* matchexpr, CaseList* cases);
+
+/*
+ *
+ */
+Expr* direct_call(Symbol funcname, ExprList* args);
 
 /*
  * Creates an empty list of expressions (used in compund expressions like lists 

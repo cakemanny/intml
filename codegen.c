@@ -129,6 +129,8 @@ static struct Var {
     TypeExpr* type;
 
     int var_id; // index into the variable_table where extra into stored
+    int arity;
+    Function* function; // can be NULL. ptr into function table for direct call
 } variable_stack[VAR_MAX];
 
 typedef struct Var Var;
@@ -211,11 +213,34 @@ static void print_function_table(FILE* out)
     fprintf(out, "----------------------------------------\n");
 }
 
-static void push_var(Symbol name, TypeExpr* type)
+static void push_var(Symbol name, TypeExpr* type, Function* thisfn)
 {
     assert(var_stack_ptr < variable_stack + VAR_MAX);
     assert(type != NULL); // We should be fully typed at this point
-    *var_stack_ptr++ = (Var){ .name = name, .type = type, .var_id = -1 };
+    // thisfn can be null
+    *var_stack_ptr++ = (Var){
+        .name = name, .type = type, .var_id = -1, .function = thisfn
+    };
+}
+
+static Var* push_var2(Symbol name, TypeExpr* type, Var* var_stack_ptr, _Bool arity)
+{
+    assert(var_stack_ptr < variable_stack + VAR_MAX);
+    assert(type != NULL); // We should be fully typed at this point
+    *var_stack_ptr++ = (Var){
+        .name = name, .type = type, .var_id = -1, .arity = arity
+    };
+    return var_stack_ptr;
+}
+static Var* lookup_var(Symbol name, Var* var_stack_ptr)
+{
+    Var* end = var_stack_ptr;
+    while (--end >= variable_stack) {
+        if (end->name == name) {
+            return end;
+        }
+    }
+    return NULL;
 }
 
 /*
@@ -253,7 +278,7 @@ static void add_var_to_closure(Function* func, Symbol name, TypeExpr* type)
     }
 }
 
-static void add_var_to_locals(Function* func, Symbol name, TypeExpr* type)
+static void add_var_to_locals(Function* func, Symbol name, TypeExpr* type, Function* thisfn)
 {
     assert(var_table_count < VAR_MAX);
     //int var_id = var_table_count;
@@ -285,7 +310,7 @@ static void add_var_to_locals(Function* func, Symbol name, TypeExpr* type)
         .size = stack_size_of_type(type)
     };
 
-    push_var(name, type);
+    push_var(name, type, thisfn);
     (var_stack_ptr - 1)->var_id = var_table_count - 1;
 }
 
@@ -1334,14 +1359,60 @@ static void gen_stack_machine_code(Expr* expr)
             // and r0 contains first word of arg (even if arg is () )
             // and %rdi contains second word
             mov(r2, r0); // first word of argument into second argument pos
-            if (stack_size_of_type(expr->right->type) > WORD_SIZE) {
+            int ssot = stack_size_of_type(expr->right->type);
+            if (ssot > WORD_SIZE) {
                 mov(r3, r1); // move into argument 3
+                if (ssot > 2 * WORD_SIZE) {
+                    //assert(0 && "TODO: apply: larger argument types");
+                    fprintf(stderr, EPFX"warn: TODO: larger arg types\n");
+                }
             }
             pop2(r0, r1); // pop closure ptr of function object is always first param
             call_reg(r0); // Emit a callq *rax kinda thing
             // if sizeof(result->type) == WORD_SIZE
             // then %rax
             // else %rax %rdi
+            break;
+        }
+        case DIRECT_CALL:
+        {
+            Function* func = function_table + expr->dc_func_id;
+            if (closure_size(func) > 0) {
+                // var lookup to get closure reference
+                Expr* varnode = var(expr->funcname);
+                varnode->type = func->type;
+                if (expr->dc_var_id >= 0) {
+                    varnode->var_id = expr->dc_var_id;
+                } else {
+                    varnode->function_id = expr->dc_closingfunc_id;
+                }
+                gen_stack_machine_code(varnode);
+                free(varnode);
+
+                push2(r0, r1);
+            }
+
+            for (ExprList* l = expr->args; l; l = l->next) {
+                gen_stack_machine_code(l->expr);
+                assert((!l->next) && "TODO: multiple args");
+            }
+            mov(r2, r0);
+            int ssot = stack_size_of_type(expr->args->expr->type);
+            if (ssot > WORD_SIZE) {
+                mov(r3, r1); // move into argument 3
+                if (ssot > 2 * WORD_SIZE) {
+                    //assert(0 && "TODO: direct-call: larger argument types");
+                    fprintf(stderr, EPFX"warn: TODO: larger arg types\n");
+                }
+            }
+            // restore looked up closure value
+            // then call
+            if (closure_size(func) > 0) {
+                pop2(r0, r1);
+            }
+            char* lbl = function_label(func);
+            call(lbl);
+            free(lbl);
             break;
         }
         case VAR:
@@ -1832,7 +1903,7 @@ static void calculate_activation_records_pat(Pattern* pat, Function* curr_func)
     switch (pat->tag)
     {
       case PAT_VAR:
-        add_var_to_locals(curr_func, pat->name, pat->type);
+        add_var_to_locals(curr_func, pat->name, pat->type, NULL);
         pat->var_id = (var_stack_ptr - 1)->var_id;
         break;
       case PAT_DISCARD:
@@ -1883,6 +1954,32 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
             // Tag the var with the var_id
             expr->var_id = var->var_id;
         }
+        break;
+      }
+      case DIRECT_CALL:
+      {
+        Var* var = lookup_var_in_func(curr_func, expr->funcname);
+        if (!var) {
+            // We only need to stick ourselves in the closure if we (funcname)
+            // close over anything - fixme
+            Var* var2 = lookup_var(expr->funcname, var_stack_ptr);
+            if (!var2) {
+                fprintf(stderr, "failed to find %s\n", expr->funcname);
+            }
+            assert(var2 && "direct call var not on var stack");
+
+            add_var_to_closure(curr_func, expr->funcname, var2->type);
+            expr->dc_closingfunc_id = fn_table_count - 1;
+            expr->dc_func_id = (var2->function - function_table);
+        } else {
+            expr->dc_var_id = var->var_id;
+            expr->dc_func_id = (var->function - function_table);
+        }
+
+        for (ExprList* l = expr->args; l; l = l->next) {
+            calculate_activation_records_expr(l->expr, curr_func);
+        }
+        break;
       }
       case UNITVAL:
       case INTVAL:
@@ -1893,7 +1990,8 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
       {
         Var* pre_func_name_stack_ptr = var_stack_ptr;
         if (expr->tag == RECFUNC_EXPR) {
-            add_var_to_locals(curr_func, expr->func.name, expr->func.functype);
+            add_var_to_locals(curr_func, expr->func.name, expr->func.functype,
+                    function_table + fn_table_count);
             expr->func.var_id = (var_stack_ptr - 1)->var_id;
         }
         Var* pre_param_stack_ptr = var_stack_ptr;
@@ -1908,7 +2006,7 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
             curr_func =
                 add_function_w_parent(expr->func.name, func_type, curr_func);
             // treat parameters like the first local
-            add_var_to_locals(curr_func, param->name, param->type);
+            add_var_to_locals(curr_func, param->name, param->type, curr_func);
         }
         calculate_activation_records_expr(expr->func.body, curr_func);
         // Here at this point, as we descend out of the tree, we ought to
@@ -1935,7 +2033,8 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
         curr_func = pre_param_curr_func;
 
         if (expr->tag != RECFUNC_EXPR) {
-            add_var_to_locals(curr_func, expr->func.name, expr->func.functype);
+            add_var_to_locals(curr_func, expr->func.name, expr->func.functype,
+                    function_table + expr->func.function_id);
             expr->func.var_id = (var_stack_ptr - 1)->var_id;
         }
 
@@ -1975,7 +2074,7 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
       case EXTERN_EXPR:
       {
         Var* saved_stack_ptr = var_stack_ptr;
-        add_var_to_locals(curr_func, expr->ext.name, expr->ext.functype);
+        add_var_to_locals(curr_func, expr->ext.name, expr->ext.functype, NULL);
         expr->ext.var_id = (var_stack_ptr - 1)->var_id;
         calculate_activation_records_expr(expr->ext.subexpr, curr_func);
         var_stack_ptr = saved_stack_ptr;
@@ -1993,6 +2092,125 @@ static void calculate_activation_records_expr(Expr* expr, Function* curr_func)
         }
         break;
       }
+    }
+}
+
+/*
+ * Replace (apply (var x) (...))
+ * With (direct-call x (...))
+ */
+static void patch_in_direct_calls(Expr* expr, Var* var_stack_ptr)
+{
+    switch (expr->tag) {
+      case PLUS:
+      case MINUS:
+      case MULTIPLY:
+      case DIVIDE:
+      case LESSTHAN:
+      case LESSEQUAL:
+      case EQUAL:
+        patch_in_direct_calls(expr->left, var_stack_ptr);
+        patch_in_direct_calls(expr->right, var_stack_ptr);
+        break;
+      case APPLY:
+      {
+        patch_in_direct_calls(expr->left, var_stack_ptr);
+        patch_in_direct_calls(expr->right, var_stack_ptr);
+
+        if (expr->left->tag == VAR) {
+            // left side is a name, perhaps
+            Var* var = lookup_var(expr->left->var, var_stack_ptr);
+            if (var && var->arity > 0) {
+                Expr* right = expr->right; // save a copy of our info
+                Expr* left = expr->left;
+                expr->tag = DIRECT_CALL;
+                expr->funcname = left->var;
+                expr->dc_var_id = left->var_id; // These shouldn't have
+                // actually been set yet...
+                expr->dc_closingfunc_id = left->function_id;
+                expr->args = add_expr(exprlist(), right);
+                expr->dc_func_id = -1; // we don't know yet
+                // type will stay the same
+            }
+        } else if (expr->left->tag == DIRECT_CALL) {
+            // Perhaps we can do something here too?
+            if (debug_codegen) {
+                fprintf(stderr, "left side of apply was direct call to %s",
+                        expr->left->funcname);
+            }
+            int left_call_arity = 0;
+            for (ExprList* l = expr->left->args; l; l = l->next) {
+                left_call_arity++;
+            }
+            Var* var = lookup_var(expr->left->funcname, var_stack_ptr);
+            if (var && var->arity > left_call_arity) {
+                // In this case we could apply to more args
+                if (debug_codegen) {
+                    fprintf(stderr, "direct call to %s is not fully applied",
+                            expr->left->funcname);
+                }
+            }
+        }
+        break;
+      }
+      case VAR:
+      case UNITVAL:
+      case INTVAL:
+      case STRVAL:
+        break;
+      case RECFUNC_EXPR:
+      {
+        var_stack_ptr = push_var2(
+                expr->func.name, expr->func.functype, var_stack_ptr, 1);
+        Param* param = expr->func.params->param;
+        Var* sp_for_body = push_var2(param->name, param->type, var_stack_ptr, 1);
+        patch_in_direct_calls(expr->func.body, sp_for_body);
+        patch_in_direct_calls(expr->func.subexpr, var_stack_ptr);
+        break;
+      }
+      case FUNC_EXPR:
+      {
+        Param* param = expr->func.params->param;
+        Var* sp_for_body = push_var2(param->name, param->type, var_stack_ptr, 1);
+        patch_in_direct_calls(expr->func.body, sp_for_body);
+
+        var_stack_ptr = push_var2(
+                expr->func.name, expr->func.functype, var_stack_ptr, 1);
+        patch_in_direct_calls(expr->func.subexpr, var_stack_ptr);
+        break;
+      }
+      case BIND_EXPR:
+        patch_in_direct_calls(expr->binding.init, var_stack_ptr);
+        patch_in_direct_calls(expr->binding.subexpr, var_stack_ptr);
+        break;
+      case IF_EXPR:
+        patch_in_direct_calls(expr->condition, var_stack_ptr);
+        patch_in_direct_calls(expr->btrue, var_stack_ptr);
+        patch_in_direct_calls(expr->bfalse, var_stack_ptr);
+        break;
+      case LIST:
+      case VECTOR:
+      case TUPLE:
+        for (ExprList* l = expr->expr_list; l; l = l->next) {
+            patch_in_direct_calls(l->expr, var_stack_ptr);
+        }
+        break;
+      case EXTERN_EXPR:
+        patch_in_direct_calls(expr->ext.subexpr, push_var2(
+                    expr->ext.name, expr->ext.functype, var_stack_ptr, 1));
+        break;
+      case MATCH_EXPR:
+        patch_in_direct_calls(expr->matchexpr, var_stack_ptr);
+        for (CaseList* k = expr->cases; k; k = k->next) {
+            patch_in_direct_calls(k->kase->expr, var_stack_ptr);
+        }
+        break;
+      case DIRECT_CALL:
+        assert(0 && "should not exist in tree yet... but may?");
+        for (ExprList* l = expr->args; l; l = l->next) {
+            patch_in_direct_calls(l->expr, var_stack_ptr);
+        }
+        break;
     }
 }
 
@@ -2093,6 +2311,11 @@ static void rewrite_functions(Expr* expr)
         for (CaseList* k = expr->cases; k; k = k->next) {
             rewrite_functions(k->kase->expr);
         }
+        break;
+      }
+      case DIRECT_CALL:
+      {
+        assert(0 && "should not exist in tree yet");
         break;
       }
     }
@@ -2309,6 +2532,13 @@ void codegen(DeclarationList* root)
     rewrite_functions(newroot);
     if (debug_codegen) {
         fputs("rewritten functions:\n\t", stderr);
+        print_expr(stderr, newroot);
+        fputs("\n", stderr);
+    }
+
+    patch_in_direct_calls(newroot, var_stack_ptr);
+    if (debug_codegen) {
+        fputs("patched direct calls:\n\t", stderr);
         print_expr(stderr, newroot);
         fputs("\n", stderr);
     }

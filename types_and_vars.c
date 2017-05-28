@@ -505,6 +505,9 @@ static void apply_theory_expr(Expr* expr, int constraint_id, TypeExpr* theory)
         apply_theory_expr(expr->matchexpr, constraint_id, theory);
         apply_theory_cases(expr->cases, constraint_id, theory);
         break;
+      case DIRECT_CALL:
+        assert(expr->tag != DIRECT_CALL && "not expected");
+        break;
     }
 }
 
@@ -1581,6 +1584,12 @@ static int deducetype_expr(Expr* expr)
         }
         return types_added;
       }
+      case DIRECT_CALL:
+      {
+        // codegen only
+        assert(expr->tag != DIRECT_CALL);
+        break;
+      }
     }
     FAIL_MISSED_CASE();
 }
@@ -2126,6 +2135,12 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
         for (CaseList* l = expr->cases; l; l = l->next) {
             result &= check_if_fully_typed_expr(l->kase->expr, hierachy);
         }
+        break;
+      }
+      case DIRECT_CALL:
+      {
+        assert(expr->tag != DIRECT_CALL);
+        break;
       }
     }
     return result;

@@ -373,6 +373,17 @@ Expr* match(Expr* matchexpr, CaseList* cases)
     return result;
 }
 
+Expr* direct_call(Symbol funcname, ExprList* args)
+{
+    Expr* result = expr(DIRECT_CALL);
+    result->funcname = funcname;
+    result->args = args;
+    result->dc_var_id = -1;
+    result->dc_closingfunc_id = -1;
+    result->dc_func_id = -1;
+    return result;
+}
+
 ExprList* exprlist()
 {
     return NULL;
@@ -976,6 +987,10 @@ void print_expr(FILE* out, const Expr* expr)
         print_expr(out, expr->matchexpr);
         fputc(' ', out);
         print_cases(out, expr->cases);
+        break;
+    case DIRECT_CALL:
+        fprintf(out, "direct-call %s ", expr->funcname);
+        print_exprlist(out, expr->args);
         break;
     }
     if (expr->type) {
