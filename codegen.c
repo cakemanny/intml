@@ -197,7 +197,7 @@ static void print_function_table(FILE* out)
         for (int j = 0; j < var_table_count; j++) {
             if (variable_table[j].func == fn) {
                 VarEx* v = &variable_table[j];
-                fprintf(out, "\t%04x:%04x %s : ", v->stack_offset, v->size, v->name);
+                fprintf(out, "\t-%04x:%04x %s : ", -v->stack_offset, v->size, v->name);
                 print_typexpr(out, v->type);
                 fputs("\n", out);
             }
@@ -900,20 +900,25 @@ static void emit_fn_prologue(Function* func)
     sub_imm(sp, stack_required(func));
     // Move ptr to closure into stack location
     if (closure_size(func) > 0) {
-        store(closure_offset(func), bp, r1);
+        store(closure_offset(func), bp, r0);
     }
     int ssot_arg = stack_size_of_type(func->type->left);
     if (ssot_arg > 0) {
         if (ssot_arg == WORD_SIZE) {
-            store(argument_offset(func), bp, r2);
+            store(argument_offset(func), bp, r1);
         } else if (ssot_arg == 2 * WORD_SIZE) {
-            store(argument_offset(func), bp, r2);
-            store(argument_offset(func) + WORD_SIZE, bp, r3);
-        }  else if (ssot_arg > 2 * WORD_SIZE) {
+            store(argument_offset(func), bp, r1);
+            store(argument_offset(func) + WORD_SIZE, bp, r2);
+        } else if (ssot_arg == 3 * WORD_SIZE) {
+            store(argument_offset(func), bp, r1);
+            store(argument_offset(func) + WORD_SIZE, bp, r2);
+            store(argument_offset(func) + 2*WORD_SIZE, bp, r3);
+        }  else if (ssot_arg > 3 * WORD_SIZE) {
             // FIXME: do something here...
             fprintf(stderr, "TODO: support larger args sizes\n");
             store(argument_offset(func), bp, r2);
             store(argument_offset(func) + WORD_SIZE, bp, r3);
+            store(argument_offset(func) + 2*WORD_SIZE, bp, r3);
         }
     }
 }
@@ -1431,20 +1436,22 @@ static void gen_stack_machine_code(Expr* expr)
 
             // and r0 contains first word of arg (even if arg is () )
             // and %rdi contains second word
-            mov(r2, r0); // first word of argument into second argument pos
             int ssot = stack_size_of_type(expr->right->type);
             if (ssot > WORD_SIZE) {
-                mov(r3, r1); // move into argument 3
                 if (ssot > 2 * WORD_SIZE) {
-                    //assert(0 && "TODO: apply: larger argument types");
-                    fprintf(stderr, EPFX"warn: TODO: larger arg types\n");
+                    if (ssot > 3 * WORD_SIZE) {
+                        //assert(0 && "TODO: apply: larger argument types");
+                        fprintf(stderr, EPFX"warn: TODO: larger arg types\n");
+                    }
+                    mov(r3, r2);
                 }
+                mov(r2, r1); // move into argument 3
             }
-            pop2(r0, r1); // pop closure ptr of function object is always first param
-            call_reg(r0); // Emit a callq *rax kinda thing
-            // if sizeof(result->type) == WORD_SIZE
-            // then %rax
-            // else %rax %rdi
+            mov(r1, r0); // first word of argument into second argument pos
+
+            pop2(t0, t1); // pop closure ptr of function object is always first param
+            mov(r0, t1);
+            call_reg(t0); // Emit a callq *rax kinda thing
             break;
         }
         case DIRECT_CALL:
@@ -1469,19 +1476,24 @@ static void gen_stack_machine_code(Expr* expr)
                 gen_stack_machine_code(l->expr);
                 assert((!l->next) && "TODO: multiple args");
             }
-            mov(r2, r0);
             int ssot = stack_size_of_type(expr->args->expr->type);
             if (ssot > WORD_SIZE) {
-                mov(r3, r1); // move into argument 3
                 if (ssot > 2 * WORD_SIZE) {
-                    //assert(0 && "TODO: direct-call: larger argument types");
-                    fprintf(stderr, EPFX"warn: TODO: larger arg types\n");
+                    if (ssot > 3 * WORD_SIZE) {
+                        //assert(0 && "TODO: direct-call: larger argument types");
+                        fprintf(stderr, EPFX"warn: TODO: larger arg types\n");
+                    }
+                    mov(r3, r2);
                 }
+                mov(r2, r1); // move into argument 3
             }
+            mov(r1, r0);
+
             // restore looked up closure value
             // then call
             if (closure_size(func) > 0) {
-                pop2(r0, r1);
+                pop2(t0, t1);
+                mov(r0, t1);
             }
             char* lbl = function_label(func);
             call(lbl);
@@ -1508,7 +1520,14 @@ static void gen_stack_machine_code(Expr* expr)
                         loadc(r1, bp, var.stack_offset + WORD_SIZE, pfn2);
                         free(pfn2);
                         if (var.size > 2 * WORD_SIZE) {
-                            fprintf(stderr, "TODO: VAR: larger var sizes\n");
+                            char* pfn3; asprintf(&pfn3, "var %s local word 3",
+                                    var.name);
+                            // load subsequent word into r1 for "return"
+                            loadc(r2, bp, var.stack_offset + 2*WORD_SIZE, pfn3);
+                            free(pfn3);
+                            if (var.size > 3 * WORD_SIZE) {
+                                fprintf(stderr, "TODO: VAR: larger var sizes\n");
+                            }
                         }
                     }
                     free(pfn);
@@ -1538,7 +1557,9 @@ static void gen_stack_machine_code(Expr* expr)
                     loadc(r0, t0, pos, pfn);
                     free(pfn);
                 } else {
-                    add_imm(t0, pos);
+                    if (pos != 0) {
+                        add_imm(t0, pos);
+                    }
                     switch (ssot) {
                         case 2 * WORD_SIZE: load2(t0, r0, r1); break;
                         case 3 * WORD_SIZE: load3(t0, r0, r1, r2); break;
