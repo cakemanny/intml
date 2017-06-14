@@ -2240,7 +2240,7 @@ static void patch_in_direct_calls(Expr* expr, Var* var_stack_ptr)
         } else if (expr->left->tag == DIRECT_CALL) {
             // Perhaps we can do something here too?
             if (debug_codegen) {
-                fprintf(stderr, "left side of apply was direct call to %s",
+                fprintf(stderr, "left side of apply was direct call to %s\n",
                         expr->left->funcname);
             }
             int left_call_arity = 0;
@@ -2251,7 +2251,7 @@ static void patch_in_direct_calls(Expr* expr, Var* var_stack_ptr)
             if (var && var->arity > left_call_arity) {
                 // In this case we could apply to more args
                 if (debug_codegen) {
-                    fprintf(stderr, "direct call to %s is not fully applied",
+                    fprintf(stderr, "direct call to %s is not fully applied\n",
                             expr->left->funcname);
                 }
             }
