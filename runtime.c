@@ -1,6 +1,14 @@
 #include "ast.h"
 #include <stdlib.h>
 
+/*
+ * It might be interesting to try implement green threads, as per this article
+ * and code sample:
+ *
+ *      https://c9x.me/articles/gthreads/code0.html
+ *      https://github.com/mpu/gthreads/tree/code0
+ */
+
 #define WORD_SIZE (sizeof(void*))
 
 static struct SizeAlloc {
