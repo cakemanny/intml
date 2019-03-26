@@ -88,6 +88,7 @@ struct Declaration {
         DECL_RECFUNC,
         DECL_TYPECTOR
     }               tag;
+    int             an_line;
     union {
         Func        func;
         Binding     binding;
@@ -108,6 +109,7 @@ struct Param {
     Symbol name;
     /* Maybe be either declared or deduced */
     TypeExpr* type;
+    int an_line;
 
     int var_id; // we misuse these in a closure list and tag them as var
 };
@@ -121,7 +123,8 @@ struct Ctor {
     enum CtorTag {
         CTOR_NOARG,
         CTOR_WARG,
-    }       tag;
+    } tag;
+    int an_line;
     Symbol name;
     TypeExpr* typexpr;  /* Only for use when tag == CTOR_WARG */
 
@@ -129,6 +132,7 @@ struct Ctor {
 };
 
 
+// TODO: Consider embedding these directly
 struct FuncExpr {
     Symbol name;
     ParamList* params;
@@ -185,6 +189,9 @@ struct Expr {
         MATCH_EXPR,
         DIRECT_CALL, /* codgen only! */
     }               tag;
+    int             an_line;
+    /* We will want to be able to type all our expressions */
+    TypeExpr*       type;
     union {
         struct { /* PLUS - APPLY */
             Expr*   left;
@@ -218,8 +225,6 @@ struct Expr {
             int     dc_func_id;
         };
     };
-    /* We will want to be able to type all our expressions */
-    TypeExpr*       type;
 };
 
 struct ExprList {
@@ -235,6 +240,7 @@ struct TypeExpr {
         TYPE_TUPLE,
         TYPE_CONSTRUCTOR,
     } tag;
+    int an_line;
     union {
         Symbol name;                /* TYPE_NAME */
         struct {                    /* TYPE_ARROW */
@@ -269,6 +275,7 @@ struct TPat {
         TPAT_STR,
         TPAT_NIL,
     } tag;
+    int an_line;
     union {
         Symbol name; /* TPAT_VAR */
         struct {
@@ -297,6 +304,8 @@ struct Pattern {
         PAT_STR,
         PAT_NIL,
     } tag;
+    int an_line;
+    TypeExpr* type;
     union {
         struct {
             Symbol name; /* PAT_VAR */
@@ -314,7 +323,6 @@ struct Pattern {
         int intval; /* PAT_INT */
         Symbol strval; /* PAT_STR */
     };
-    TypeExpr* type;
 };
 
 struct PatternList {
@@ -325,6 +333,7 @@ struct PatternList {
 struct Case {
     Pattern* pattern;
     Expr* expr;
+    int an_line;
 };
 
 struct CaseList {

@@ -6,6 +6,9 @@
 #include "ast.h"
 #include "platform.h" // e.g. win32 specific macros
 
+/* Line number from flex lexer */
+extern int yylineno;
+
 // convenience, check memory returned by malloc
 static void* xmalloc(size_t size)
 {
@@ -55,6 +58,7 @@ Declaration* func_w_type(
 {
     Declaration* result = xmalloc(sizeof *result);
     result->tag = DECL_FUNC;
+    result->an_line = yylineno;
     result->func.name = name;
     result->func.params = params;
     result->func.body = body;
@@ -86,6 +90,7 @@ Declaration* binding(Pattern* pattern, Expr* init)
 {
     Declaration* result = xmalloc(sizeof *result);
     result->tag = DECL_BIND;
+    result->an_line = yylineno;
     result->binding.pattern = pattern;
     result->binding.init = init;
     result->binding.type = NULL;
@@ -97,6 +102,7 @@ Declaration* type(Symbol name, TypeExpr* definition)
 {
     Declaration* result = xmalloc(sizeof *result);
     result->tag = DECL_TYPE;
+    result->an_line = yylineno;
     result->type.name = name;
     result->type.definition = definition;
     return result;
@@ -106,6 +112,7 @@ Declaration* externdecl(Symbol name, TypeExpr* type, Symbol external_name)
 {
     Declaration* result = xmalloc(sizeof *result);
     result->tag = DECL_EXTERN;
+    result->an_line = yylineno;
     result->ext.name = name;
     result->ext.type = type;
     result->ext.external_name = external_name;
@@ -116,6 +123,7 @@ Declaration* type_ctor(Symbol name, CtorList* ctors)
 {
     Declaration* result = xmalloc(sizeof *result);
     result->tag = DECL_TYPECTOR;
+    result->an_line = yylineno;
     result->ctor.name = name;
     result->ctor.ctors = ctors;
     return result;
@@ -124,6 +132,7 @@ Declaration* type_ctor(Symbol name, CtorList* ctors)
 Param* param_with_type(Symbol name, TypeExpr* type)
 {
     Param* param = xmalloc(sizeof *param);
+    param->an_line = yylineno;
     param->name = name;
     param->type = type;
     param->var_id = -1;
@@ -159,6 +168,7 @@ static Ctor* ctor(enum CtorTag tag, Symbol name, TypeExpr* typexpr)
 {
     Ctor* result = xmalloc(sizeof *result);
     result->tag = tag;
+    result->an_line = yylineno;
     result->name = name;
     result->typexpr = typexpr;
     result->ctor_id = -1;
@@ -198,6 +208,7 @@ static Expr* binexpr(int tag, Expr* left, Expr* right)
 {
     Expr* result = xmalloc(sizeof *result);
     result->tag = tag;
+    result->an_line = yylineno;
     result->left = left;
     result->right = right;
     result->type = NULL;    /* worked out by type check */
@@ -241,6 +252,7 @@ static Expr* expr(enum ExprTag tag)
 {
     Expr* expr = xmalloc(sizeof *expr);
     expr->tag = tag;
+    expr->an_line = yylineno;
     /*
      * NULL out the type info because that will be deduced later
      */
@@ -406,6 +418,7 @@ ExprList* reverse_list(ExprList* list)
 static struct TypeExpr* typexpr(enum TypeExprTag tag)
 {
     struct TypeExpr* result = xmalloc(sizeof *result);
+    result->an_line = yylineno;
     result->tag = tag;
     return result;
 }
@@ -479,6 +492,7 @@ static struct Pattern* pat(enum PatternTag tag)
 {
     struct Pattern* result = xmalloc(sizeof *result);
     result->tag = tag;
+    result->an_line = yylineno;
     result->type = NULL; /* worked out later in type checker */
     return result;
 }
@@ -566,16 +580,22 @@ PatternList* reverse_patterns(PatternList* list)
 static TPat* tpat(enum TPatTag tag)
 {
     TPat* tp = xmalloc(sizeof *tp);
+    tp->an_line = yylineno;
     tp->tag = tag;
     return tp;
 }
+
 TPat* tpat_var(Symbol name)
 {
     TPat* tp = tpat(TPAT_VAR);
     tp->name = name;
     return tp;
 }
-TPat* tpat_discard() { return tpat(TPAT_DISCARD); }
+
+TPat* tpat_discard() {
+    return tpat(TPAT_DISCARD);
+}
+
 TPat* tpat_cons(TPat* head, TPat* tail)
 {
     TPat* tp = tpat(TPAT_CONS);
@@ -725,6 +745,7 @@ Case* matchcase(Pattern* pattern, Expr* expr)
     Case* result = xmalloc(sizeof *result);
     result->pattern = pattern;
     result->expr = expr;
+    result->an_line = yylineno;
     return result;
 }
 

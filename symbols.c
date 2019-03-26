@@ -67,6 +67,3 @@ void symbol_list_free(SymList* list)
         head = next;
     }
 }
-
-
-
