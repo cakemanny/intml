@@ -11,6 +11,7 @@
 #endif
 
 #define EPFX    "typecheck: error: "
+#define LEPFX   "typecheck:%d: error: "
 #define PFX     "typecheck: "
 
 // for where our code should never reach if case statements are complete
@@ -716,14 +717,15 @@ static const char* expr_name(enum ExprTag tag)
             }                                                   \
         } while (0)
 
-#define typexpr_conforms_or_exit(ET,AT,M,...) do {              \
-            TypeExpr* __et = (ET);                              \
-            TypeExpr* __at = (AT);                              \
-            if (!typexpr_conforms_to(__et, __at)) {             \
-                tprintf(stderr, EPFX M "\n", ##__VA_ARGS__);    \
-                print_type_error(__et, __at);                   \
-                exit(EXIT_FAILURE);                             \
-            }                                                   \
+#define typexpr_conforms_or_exit(LN,ET,AT,M,...) do {                   \
+            int __line = LN;                                            \
+            TypeExpr* __et = (ET);                                      \
+            TypeExpr* __at = (AT);                                      \
+            if (!typexpr_conforms_to(__et, __at)) {                     \
+                tprintf(stderr, LEPFX M "\n", __line, ##__VA_ARGS__);   \
+                print_type_error(__et, __at);                           \
+                exit(EXIT_FAILURE);                                     \
+            }                                                           \
         } while (0)
 
 static int count_names_pat(Pattern* pat);
@@ -790,7 +792,7 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
       case PAT_VAR:
       {
         if (pat->type) {
-            typexpr_conforms_or_exit(pat->type, init_type,
+            typexpr_conforms_or_exit(pat->an_line, pat->type, init_type,
                     "name %s in let binding", pat->name);
             theorise_equal(pat->type, init_type);
             theorise_equal(init_type, pat->type);
@@ -803,7 +805,8 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
       case PAT_DISCARD:
       {
         if (pat->type) {
-            typexpr_conforms_or_exit(pat->type, init_type, "_ in let binding");
+            typexpr_conforms_or_exit(pat->an_line, pat->type, init_type,
+                    "_ in let binding");
             theorise_equal(pat->type, init_type);
             theorise_equal(init_type, pat->type);
         } else {
@@ -847,7 +850,7 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
         }
 
         if (pat->type) {
-            typexpr_conforms_or_exit(pat->type, init_type,
+            typexpr_conforms_or_exit(pat->an_line, pat->type, init_type,
                     "pattern %P in let binding", pat);
             theorise_equal(pat->type, init_type);
             theorise_equal(init_type, pat->type);
@@ -898,7 +901,7 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
         }
 
         if (pat->type) {
-            typexpr_conforms_or_exit(pat->type, init_type,
+            typexpr_conforms_or_exit(pat->an_line, pat->type, init_type,
                     "pattern %P in let binding", pat);
             theorise_equal(pat->type, init_type);
             theorise_equal(init_type, pat->type);
@@ -916,15 +919,15 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
         assert(solid_type(found_type));
 
         // Check init type matches the constructors type directly
-        typexpr_conforms_or_exit(init_type, found_type, "type of pattern '%s' "
-                "does not match the type the value being matched against "
-                "constructs ", pat->ctor_name);
+        typexpr_conforms_or_exit(pat->an_line, init_type, found_type,
+                "type of pattern '%s' does not match the type the value "
+                "being matched against constructs ", pat->ctor_name);
         theorise_equal(init_type, found_type);
 
         if (pat->type) {
-            typexpr_conforms_or_exit(found_type, pat->type, "type of pattern "
-                    "does not match the type which constructor '%s' "
-                    "constructs ", pat->ctor_name);
+            typexpr_conforms_or_exit(pat->an_line, found_type, pat->type,
+                    "type of pattern does not match the type which "
+                    "constructor '%s' constructs ", pat->ctor_name);
             theorise_equal(pat->type, found_type);
         } else {
             pat->type = found_type;
@@ -939,18 +942,18 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
         TypeExpr* found_type = found_var->type;
         assert(found_type->tag == TYPE_ARROW); // The constructor must be a fn
 
-        typexpr_conforms_or_exit(init_type, found_type->right, "type of "
-                "pattern '%s _' does not match the type the value being "
-                "matched against constructs ", pat->ctor_name);
+        typexpr_conforms_or_exit(pat->an_line, init_type, found_type->right,
+                "type of pattern '%s _' does not match the type the value "
+                "being matched against constructs ", pat->ctor_name);
         theorise_equal(init_type, found_type->right);
 
         // recurse - the ctor_arg has ctor fn param type
         pattern_match_and_push_vars0(pat->ctor_arg, found_type->left);
 
         if (pat->type) {
-            typexpr_conforms_or_exit(found_type->right, pat->type, "type of "
-                    "pattern does not match the type which constructor '%s' "
-                    "constructs ", pat->ctor_name);
+            typexpr_conforms_or_exit(pat->an_line, found_type->right, pat->type,
+                    "type of pattern does not match the type which "
+                    "constructor '%s' constructs ", pat->ctor_name);
             theorise_equal(pat->type, found_type->right);
         } else {
             pat->type = found_type->right;
@@ -961,8 +964,8 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
       {
         TypeExpr* int_type = lookup_typexpr(symbol("int"));
 
-        typexpr_conforms_or_exit(
-                init_type, int_type, "int literal pattern %d", pat->intval);
+        typexpr_conforms_or_exit(pat->an_line, init_type, int_type,
+                "int literal pattern %d", pat->intval);
 
         if (!pat->type) {
             pat->type = int_type;
@@ -974,8 +977,8 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
       {
         TypeExpr* str_type = lookup_typexpr(symbol("string"));
 
-        typexpr_conforms_or_exit(init_type, str_type, "string literal pattern "
-                "\"%s\"", pat->strval);
+        typexpr_conforms_or_exit(pat->an_line, init_type, str_type,
+                "string literal pattern \"%s\"", pat->strval);
 
         if (!pat->type) {
             pat->type = str_type;
@@ -1014,7 +1017,7 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
         }
 
         if (pat->type) {
-            typexpr_conforms_or_exit(pat->type, init_type,
+            typexpr_conforms_or_exit(pat->an_line, pat->type, init_type,
                     "pattern %P in let binding", pat);
             theorise_equal(pat->type, init_type);
             theorise_equal(init_type, pat->type);
@@ -1059,6 +1062,7 @@ static int deducetype_expr(Expr* expr)
     }
 
     dbgprint("deduce type of %s expression\n", expr_name(expr->tag));
+    int lineno = expr->an_line;
 
     /*
      * Pattern to use:
@@ -1081,11 +1085,11 @@ static int deducetype_expr(Expr* expr)
         int types_added =
             deducetype_expr(expr->left) + deducetype_expr(expr->right);
 
-        typexpr_conforms_or_exit(int_type, expr->left->type,
+        typexpr_conforms_or_exit(lineno, int_type, expr->left->type,
                 "left side of %s expression", expr_name(expr->tag));
         types_added += theorise_equal(expr->left->type, int_type);
 
-        typexpr_conforms_or_exit(int_type, expr->right->type,
+        typexpr_conforms_or_exit(lineno, int_type, expr->right->type,
                 "right side of %s expression", expr_name(expr->tag));
         types_added += theorise_equal(expr->right->type, int_type);
 
@@ -1106,7 +1110,7 @@ static int deducetype_expr(Expr* expr)
         TypeExpr* left_type = expr->left->type;
         TypeExpr* right_type = expr->right->type;
 
-        typexpr_conforms_or_exit(left_type, right_type, "right of "
+        typexpr_conforms_or_exit(lineno, left_type, right_type, "right of "
                 "equals expression does not match left side in type");
         types_added += theorise_equal(left_type, right_type);
         types_added += theorise_equal(right_type, left_type);
@@ -1152,7 +1156,7 @@ static int deducetype_expr(Expr* expr)
                     exit(EXIT_FAILURE);
                 }
             }
-            typexpr_conforms_or_exit(left_type->left, right_type,
+            typexpr_conforms_or_exit(lineno, left_type->left, right_type,
                     "right side of apply expression");
             dbgtprintf("left type: %T, right type %T\n", left_type,
                     right_type);
@@ -1161,13 +1165,13 @@ static int deducetype_expr(Expr* expr)
         }
 
         if (expr->type) {
-            typexpr_conforms_or_exit(left_type->right, expr->type,
+            typexpr_conforms_or_exit(lineno, left_type->right, expr->type,
                     "type of apply expression does not match result "
                     "type of function on left");
             types_added += theorise_equal(expr->type, left_type->right);
             // we can work out the type of the function
             TypeExpr* inferred_type = typearrow(right_type, expr->type);
-            typexpr_conforms_or_exit(expr->left->type, inferred_type,
+            typexpr_conforms_or_exit(lineno, expr->left->type, inferred_type,
                     "type of (RHS -> apply expr) does not match "
                     "the function type");
             if (!solid_type(left_type)) {
@@ -1189,7 +1193,7 @@ static int deducetype_expr(Expr* expr)
         TypeExpr* found_type = found_var->type;
         if (expr->type) {
             if (found_type) {
-                typexpr_conforms_or_exit(found_type, expr->type,
+                typexpr_conforms_or_exit(lineno, found_type, expr->type,
                         "var expression type did not match previously "
                         "known type for %s", expr->var);
                 if (solid_type(expr->type) && solid_type(found_type)) {
@@ -1292,7 +1296,7 @@ static int deducetype_expr(Expr* expr)
 
         if (expr->func.resulttype) {
             check_type_names_are_declared(expr->func.resulttype);
-            typexpr_conforms_or_exit(expr->func.resulttype, bodytype,
+            typexpr_conforms_or_exit(lineno, expr->func.resulttype, bodytype,
                     "body of function %s", expr->func.name);
             types_added += theorise_equal(bodytype, expr->func.resulttype);
         }
@@ -1311,7 +1315,7 @@ static int deducetype_expr(Expr* expr)
             if (it->type) {
                 if (param->type) {
                     // compare
-                    typexpr_conforms_or_exit(it->type, param->type,
+                    typexpr_conforms_or_exit(lineno, it->type, param->type,
                             "param %s of function %s",
                             it->name, expr->func.name);
                     types_added += theorise_equal(param->type, it->type);
@@ -1355,7 +1359,7 @@ static int deducetype_expr(Expr* expr)
                     func_type);
 
             if (expr->func.functype) {
-                typexpr_conforms_or_exit(func_type, expr->func.functype,
+                typexpr_conforms_or_exit(lineno, func_type, expr->func.functype,
                         "type of function %s", expr->func.name);
                 types_added += theorise_equal(expr->func.functype, func_type);
                 types_added += theorise_equal(func_type, expr->func.functype);
@@ -1378,8 +1382,9 @@ static int deducetype_expr(Expr* expr)
 
         assert(subexprtype->tag);
         if (expr->type) {
-            typexpr_conforms_or_exit(subexprtype, expr->type, "recorded type "
-                    "of expression following %s definition", expr->func.name);
+            typexpr_conforms_or_exit(lineno,  subexprtype, expr->type,
+                    "recorded type of expression following %s definition",
+                    expr->func.name);
             types_added += theorise_equal(expr->type, subexprtype);
             types_added += theorise_equal(subexprtype, expr->type);
         } else {
@@ -1410,7 +1415,7 @@ static int deducetype_expr(Expr* expr)
 
         assert(subexprtype->tag);
         if (expr->type) {
-            typexpr_conforms_or_exit(subexprtype, expr->type,
+            typexpr_conforms_or_exit(lineno, subexprtype, expr->type,
                     "conflicting types for expression following binding of %P",
                     expr->binding.pattern);
             types_added += theorise_equal(expr->type, subexprtype);
@@ -1433,7 +1438,7 @@ static int deducetype_expr(Expr* expr)
         // start by enforce int_type on the condition
         assert(expr->condition->type->tag);
         {
-            typexpr_conforms_or_exit(int_type, expr->condition->type,
+            typexpr_conforms_or_exit(lineno, int_type, expr->condition->type,
                     "condition of if expression");
             types_added += theorise_equal(expr->condition->type, int_type);
         }
@@ -1444,14 +1449,15 @@ static int deducetype_expr(Expr* expr)
         assert(true_type && false_type);
         {
             // compare!
-            typexpr_conforms_or_exit(true_type, false_type, "true and false "
-                    "branches of if expression with different types");
+            typexpr_conforms_or_exit(lineno, true_type, false_type, "true and "
+                    "false branches of if expression with different types");
             types_added += theorise_equal(true_type, false_type);
             types_added += theorise_equal(false_type, true_type);
         }
 
         if (expr->type) {
-            typexpr_conforms_or_exit(true_type, expr->type, "if expression");
+            typexpr_conforms_or_exit(lineno, true_type, expr->type,
+                    "if expression");
             types_added += theorise_equal(expr->type, true_type);
             types_added += theorise_equal(true_type, expr->type);
         } else {
@@ -1475,8 +1481,8 @@ static int deducetype_expr(Expr* expr)
             for (ExprList* tail = head->next; tail; tail = tail->next, pos++) {
                 TypeExpr* hdtype = head->expr->type;
                 TypeExpr* tltype = tail->expr->type;
-                typexpr_conforms_or_exit(hdtype, tltype, "item %d in %s, "
-                        "type does not 1st item type", pos, constrname);
+                typexpr_conforms_or_exit(lineno, hdtype, tltype, "item %d in "
+                        "%s, type does not 1st item type", pos, constrname);
                 types_added += theorise_equal(hdtype, tltype);
                 types_added += theorise_equal(tltype, hdtype);
             }
@@ -1537,7 +1543,7 @@ static int deducetype_expr(Expr* expr)
                 }
             }
 
-            typexpr_conforms_or_exit(expected_type, expr->type,
+            typexpr_conforms_or_exit(lineno, expected_type, expr->type,
                     "tuple expression");
             types_added += theorise_equal(expr->type, expected_type);
             types_added += theorise_equal(expected_type, expr->type);
@@ -1567,7 +1573,7 @@ static int deducetype_expr(Expr* expr)
         int pos = 2;
         for (CaseList* tail = head->next; tail; tail = tail->next, pos++) {
             TypeExpr* tail_type = tail->kase->expr->type;
-            typexpr_conforms_or_exit(head_type, tail_type, "result "
+            typexpr_conforms_or_exit(lineno, head_type, tail_type, "result "
                     "expression of case %d of match expression has type "
                     "not matching the first case", pos);
             types_added += theorise_equal(head_type, tail_type);
@@ -1575,7 +1581,7 @@ static int deducetype_expr(Expr* expr)
         }
 
         if (expr->type) {
-            typexpr_conforms_or_exit(head_type, expr->type, "match expression");
+            typexpr_conforms_or_exit(lineno, head_type, expr->type, "match expression");
             types_added += theorise_equal(expr->type, head_type);
             types_added += theorise_equal(head_type, expr->type);
         } else {
@@ -1705,6 +1711,7 @@ static void type_and_check_exhaustively(DeclarationList* root)
 
         for (DeclarationList* c = root; c; c = c->next) {
             Declaration* decl = c->declaration;
+            int lineno = decl->an_line;
             switch (decl->tag)
             {
               case DECL_TYPE:
@@ -1724,7 +1731,7 @@ static void type_and_check_exhaustively(DeclarationList* root)
                 assert(init_type->tag);
                 dbgtprintf("deduced type %P: %T\n", binding.pattern, init_type);
                 if (binding.type) {
-                    typexpr_conforms_or_exit(binding.type, init_type,
+                    typexpr_conforms_or_exit(lineno, binding.type, init_type,
                             "type annotation does not matched "
                             "deduced type for toplevel binding %P",
                             binding.pattern);
@@ -1768,8 +1775,9 @@ static void type_and_check_exhaustively(DeclarationList* root)
                 TypeExpr* bodytype = decl->func.body->type;
 
                 if (decl->func.resulttype) {
-                    typexpr_conforms_or_exit(decl->func.resulttype, bodytype,
-                            "body of toplevel function %s", decl->func.name);
+                    typexpr_conforms_or_exit(lineno, decl->func.resulttype,
+                            bodytype, "body of toplevel function %s",
+                            decl->func.name);
                     types_added +=
                         theorise_equal(bodytype, decl->func.resulttype);
                 }
@@ -1781,9 +1789,9 @@ static void type_and_check_exhaustively(DeclarationList* root)
                     assert(param->name == it->name);
                     if (it->type) {
                         if (param->type) {
-                            typexpr_conforms_or_exit(it->type, param->type,
-                                    "param %s of toplevel function %s",
-                                    it->name, decl->func.name);
+                            typexpr_conforms_or_exit(lineno, it->type,
+                                    param->type, "param %s of toplevel "
+                                    "function %s", it->name, decl->func.name);
                             types_added +=
                                 theorise_equal(param->type, it->type);
                         } else {
@@ -1824,8 +1832,8 @@ static void type_and_check_exhaustively(DeclarationList* root)
                             decl->func.name, func_type);
 
                     if (decl->func.type) {
-                        typexpr_conforms_or_exit(func_type, decl->func.type,
-                                "type of toplevel function %s",
+                        typexpr_conforms_or_exit(lineno, func_type,
+                                decl->func.type, "type of toplevel function %s",
                                 decl->func.name);
                         if (!solid_type(decl->func.type)) {
                             dbgtprintf("decl->func.type: %T\n", decl->func.type);
