@@ -232,18 +232,17 @@ static TypeExpr* new_type_constraint()
 
 static void add_type_name(Type* node)
 {
-    if (type_name_count < TYPE_NAMES_MAX) {
-        if (lookup_ornull_typexpr(node->name) != NULL) {
-            fprintf(stderr, EPFX"type %s has already been defined\n",
-                    node->name);
-            exit(EXIT_FAILURE);
-        }
-        dbgprint("adding named type: %s\n", node->name);
-        type_names[type_name_count++] = node;
-    } else {
+    if (type_name_count >= TYPE_NAMES_MAX) {
         fprintf(stderr, EPFX"more than %d typenames defined\n", TYPE_NAMES_MAX);
         exit(EXIT_FAILURE);
     }
+    if (lookup_ornull_typexpr(node->name) != NULL) {
+        fprintf(stderr, EPFX"type %s has already been defined\n",
+                node->name);
+        exit(EXIT_FAILURE);
+    }
+    dbgprint("adding named type: %s\n", node->name);
+    type_names[type_name_count++] = node;
 }
 
 static void add_builtin_type(const char* name_of_type)
@@ -258,7 +257,8 @@ static void add_builtin_type(const char* name_of_type)
 static void push_var(Symbol name, TypeExpr* type)
 {
     if (var_stack_ptr >= variable_stack + VAR_MAX) {
-        fprintf(stderr, EPFX"more than %d variable bindings in single scope\n", VAR_MAX);
+        fprintf(stderr, EPFX"more than %d variable bindings in single scope\n",
+                VAR_MAX);
         exit(EXIT_FAILURE);
     }
     if (debug_type_checker) {
@@ -273,8 +273,9 @@ static void push_var(Symbol name, TypeExpr* type)
 
 /*
  * Lookup @name in the symbol table
+ * Giving @lineno of the ast node
  */
-static struct Var* lookup_var(Symbol name)
+static struct Var* lookup_var(Symbol name, int lineno)
 {
     struct Var* end = var_stack_ptr;
     while (--end >= variable_stack) {
@@ -282,7 +283,7 @@ static struct Var* lookup_var(Symbol name)
             return end;
         }
     }
-    fprintf(stderr, EPFX"value %s not in scope\n", name);
+    fprintf(stderr, LEPFX"value %s not in scope\n", lineno, name);
     exit(EXIT_FAILURE);
 }
 
@@ -707,14 +708,15 @@ static const char* expr_name(enum ExprTag tag)
     return expr_name[tag];
 }
 
-#define typexpr_equals_or_exit(ET,AT,M,...) do {                \
-            TypeExpr* __et = (ET);                              \
-            TypeExpr* __at = (AT);                              \
-            if (!typexpr_equals(__et, __at)) {                  \
-                fprintf(stderr, EPFX M "\n", ##__VA_ARGS__);    \
-                print_type_error(__et, __at);                   \
-                exit(EXIT_FAILURE);                             \
-            }                                                   \
+#define typexpr_equals_or_exit(LN,ET,AT,M,...) do {                     \
+            int __line = LN;                                            \
+            TypeExpr* __et = (ET);                                      \
+            TypeExpr* __at = (AT);                                      \
+            if (!typexpr_equals(__et, __at)) {                          \
+                fprintf(stderr, LEPFX M "\n", __line,  ##__VA_ARGS__);  \
+                print_type_error(__et, __at);                           \
+                exit(EXIT_FAILURE);                                     \
+            }                                                           \
         } while (0)
 
 #define typexpr_conforms_or_exit(LN,ET,AT,M,...) do {                   \
@@ -755,7 +757,9 @@ static void add_names_to_array_pat(Pattern* pat, Symbol** ptr_next)
 {
     switch (pat->tag)
     {
-      case PAT_VAR: *(*ptr_next)++ = pat->name; return;
+      case PAT_VAR:
+          *(*ptr_next)++ = pat->name;
+          return;
       case PAT_DISCARD: return;
       case PAT_CONS:
         add_names_to_array_pat(pat->left, ptr_next);
@@ -769,7 +773,7 @@ static void add_names_to_array_pat(Pattern* pat, Symbol** ptr_next)
       case PAT_CTOR_WARG:
         add_names_to_array_pat(pat->ctor_arg, ptr_next);
         return;
-      case PAT_CTOR_NOARG:
+      case PAT_CTOR_NOARG: return;
       case PAT_INT: return;
       case PAT_STR: return;
       case PAT_NIL: return;
@@ -840,7 +844,8 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
             pattern_match_and_push_vars0(pat->right, init_type);
         } else {
             tprintf(stderr,
-                    EPFX"expected list type in init for pattern %P\n", pat);
+                    LEPFX"expected list type in init for pattern %P\n",
+                    pat->an_line, pat);
             TypeExpr* expected = typeconstructor(
                     typename(symbol("'a")), symbol("list"));
             print_type_error(expected, init_type);
@@ -894,8 +899,8 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
                 pattern_match_and_push_vars0(l->pattern, tl->type);
             }
         } else {
-            tprintf(stderr, EPFX"expected %d-tuple type init for pattern %P\n",
-                    pat_list_len(pat->pat_list), pat);
+            tprintf(stderr, LEPFX"expected %d-tuple type init for pattern %P\n",
+                    pat->an_line, pat_list_len(pat->pat_list), pat);
             tprintf(stderr, "  actual: %T\n", init_type);
             exit(EXIT_FAILURE);
         }
@@ -913,7 +918,7 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
       case PAT_CTOR_NOARG:
       {
         // Get the type that the constructor constructs:
-        struct Var* found_var = lookup_var(pat->ctor_name);
+        struct Var* found_var = lookup_var(pat->ctor_name, pat->an_line);
         TypeExpr* found_type = found_var->type;
         assert(found_type);
         assert(solid_type(found_type));
@@ -938,7 +943,7 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
       {
         // Do we need to check that the sub-pattern can match the type the
         // constuctor constructs?
-        struct Var* found_var = lookup_var(pat->ctor_name);
+        struct Var* found_var = lookup_var(pat->ctor_name, pat->an_line);
         TypeExpr* found_type = found_var->type;
         assert(found_type->tag == TYPE_ARROW); // The constructor must be a fn
 
@@ -1006,8 +1011,8 @@ static void pattern_match_and_push_vars0(Pattern* pat, TypeExpr* init_type)
                 && init_type->constructor == symbol("list")) {
             // This is what we hope for
         } else {
-            tprintf(stderr,
-                    EPFX"expected list type in init for pattern %P\n", pat);
+            tprintf(stderr, LEPFX"expected list type in init for pattern %P\n",
+                    pat->an_line, pat);
             TypeExpr* expected = typeconstructor(
                     typename(symbol("'a")), symbol("list"));
             print_type_error(expected, init_type);
@@ -1040,8 +1045,8 @@ static void pattern_match_and_push_vars(Pattern* pat, TypeExpr* init_type)
     for (Symbol* it = names; it < end - 1; ++it) {
         for (Symbol* it2 = it + 1; it2 < end; ++it2) {
             if (*it == *it2) {
-                fprintf(stderr, EPFX"variable %s bound twice in pattern\n",
-                        *it);
+                fprintf(stderr, LEPFX"variable %s bound twice in pattern\n",
+                        pat->an_line, *it);
                 exit(EXIT_FAILURE);
             }
         }
@@ -1095,7 +1100,7 @@ static int deducetype_expr(Expr* expr)
 
         // type should be int
         if (expr->type) {
-            typexpr_equals_or_exit(int_type, expr->type,
+            typexpr_equals_or_exit(expr->an_line, int_type, expr->type,
                     "%s expression", expr_name(expr->tag));
         } else {
             expr->type = int_type;
@@ -1116,7 +1121,8 @@ static int deducetype_expr(Expr* expr)
         types_added += theorise_equal(right_type, left_type);
 
         if (expr->type) {
-            typexpr_equals_or_exit(int_type, expr->type, "equals expression");
+            typexpr_equals_or_exit(expr->an_line, int_type, expr->type,
+                    "equals expression");
         } else {
             expr->type = int_type; // result of comparison is int
             types_added++;
@@ -1150,9 +1156,10 @@ static int deducetype_expr(Expr* expr)
                     types_added += theorise_equal(old_left_type, left_type);
                 }
                 if (left_type->tag != TYPE_ARROW) {
-                    tprintf(stderr, EPFX"left side of apply expression "
+                    tprintf(stderr, LEPFX"left side of apply expression "
                             "must be a function\n  expected: %T -> 'b\n "
-                            "  actual: %T\n", right_type, left_type);
+                            "  actual: %T\n", expr->an_line, right_type,
+                            left_type);
                     exit(EXIT_FAILURE);
                 }
             }
@@ -1189,7 +1196,7 @@ static int deducetype_expr(Expr* expr)
       }
       case VAR:
       {
-        struct Var* found_var = lookup_var(expr->var);
+        struct Var* found_var = lookup_var(expr->var, expr->an_line);
         TypeExpr* found_type = found_var->type;
         if (expr->type) {
             if (found_type) {
@@ -1506,7 +1513,8 @@ static int deducetype_expr(Expr* expr)
                 }
             }
             if (expr->type->constructor != constrname) {
-                fprintf(stderr, EPFX"%s expression\n", expr_name(expr->tag));
+                fprintf(stderr, LEPFX"%s expression\n", expr->an_line,
+                        expr_name(expr->tag));
                 tprintf(stderr, "  expected: 'a %s\n  actual: %T\n",
                         constrname, expr->type);
                 exit(EXIT_FAILURE);
@@ -1865,8 +1873,9 @@ static void type_and_check_exhaustively(DeclarationList* root)
               case DECL_EXTERN:
               {
                 if (!solid_type(decl->ext.type)) {
-                    fprintf(stderr, EPFX"external declaration does not have "
-                            "complete type signature: %s\n", decl->ext.name);
+                    fprintf(stderr, LEPFX"external declaration does not have "
+                            "complete type signature: %s\n", decl->an_line,
+                            decl->ext.name);
                     exit(EXIT_FAILURE);
                 }
                 push_var(decl->ext.name, decl->ext.type);
@@ -1881,8 +1890,9 @@ static void type_and_check_exhaustively(DeclarationList* root)
                 for (CtorList* l = decl->ctor.ctors; l; l = l->next) {
                     for (CtorList* m = decl->ctor.ctors; m; m = m->next) {
                         if (l < m && l->ctor->name == m->ctor->name) {
-                            fprintf(stderr, EPFX"There are two constructors "
-                                    "with the same name: %s\n", l->ctor->name);
+                            fprintf(stderr, LEPFX"There are two constructors "
+                                    "with the same name: %s\n", decl->an_line,
+                                    l->ctor->name);
                             exit(EXIT_FAILURE);
                         }
                     }
@@ -1998,8 +2008,8 @@ static _Bool check_if_fully_typed_pattern(Pattern* pat, SymList* hierachy)
 {
     _Bool result = 1;
     if (!solid_type(pat->type)) {
-        fprintf(stderr, EPFX"unable to determine type of binding %s\n",
-                pat->name);
+        fprintf(stderr, LEPFX"unable to determine type of binding %s\n",
+                pat->an_line, pat->name);
         print_binding_hierachy(stderr, hierachy);
         result = 0;
     }
@@ -2033,8 +2043,8 @@ static _Bool check_if_fully_typed_params(ParamList* params, SymList* hierachy)
     _Bool result = 1;
     for (ParamList* c = params; c; c = c->next) {
         if (!solid_type(c->param->type)) {
-            fprintf(stderr, EPFX"unable to determine type of parameter %s\n",
-                    c->param->name);
+            fprintf(stderr, LEPFX"unable to determine type of parameter %s\n",
+                    c->param->an_line, c->param->name);
             print_binding_hierachy(stderr, hierachy);
             result = 0;
         }
@@ -2054,7 +2064,8 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
       case LESSEQUAL:
       case APPLY:
         if (!solid_type(expr->type)) {
-            fprintf(stderr, EPFX"%s expr with no type\n", expr_name(expr->tag));
+            fprintf(stderr, LEPFX"%s expr with no type\n", expr->an_line,
+                    expr_name(expr->tag));
             print_binding_hierachy(stderr, hierachy);
             result = 0;
         }
@@ -2063,7 +2074,8 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
         break;
       case VAR:
         if (!solid_type(expr->type)) {
-            fprintf(stderr, EPFX"var %s with no type\n", expr->var);
+            fprintf(stderr, LEPFX"var %s with no type\n", expr->an_line,
+                    expr->var);
             print_binding_hierachy(stderr, hierachy);
             result = 0;
         }
@@ -2077,7 +2089,8 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
       case FUNC_EXPR:
       {
         if (!solid_type(expr->func.functype)) {
-            fprintf(stderr, EPFX"func %s with no type\n", expr->func.name);
+            fprintf(stderr, LEPFX"func %s with no type\n", expr->an_line,
+                    expr->func.name);
             print_binding_hierachy(stderr, hierachy);
             result = 0;
         }
@@ -2106,7 +2119,7 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
       case IF_EXPR:
       {
         if (!solid_type(expr->type)) {
-            fprintf(stderr, EPFX"if expression with no type\n");
+            fprintf(stderr, LEPFX"if expression with no type\n", expr->an_line);
             print_binding_hierachy(stderr, hierachy);
             result = 0;
         }
@@ -2120,7 +2133,8 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
       case TUPLE:
       {
         if (!solid_type(expr->type)) {
-            fprintf(stderr, EPFX"%s with no type\n", expr_name(expr->tag));
+            fprintf(stderr, LEPFX"%s with no type\n", expr->an_line,
+                    expr_name(expr->tag));
             print_binding_hierachy(stderr, hierachy);
             result = 0;
         }
@@ -2135,7 +2149,7 @@ static _Bool check_if_fully_typed_expr(Expr* expr, SymList* hierachy)
       case MATCH_EXPR:
       {
         if (!solid_type(expr->type)) {
-          fprintf(stderr, EPFX"match expression with no type\n");
+          fprintf(stderr, LEPFX"match expression with no type\n", expr->an_line);
           print_binding_hierachy(stderr, hierachy);
           result = 0;
         }
@@ -2169,8 +2183,8 @@ static _Bool check_if_fully_typed_root(DeclarationList* root)
           {
             SymList* hierachy = symbol_list(decl->func.name);
             if (!solid_type(decl->func.type)) {
-                fprintf(stderr, EPFX"unable to deduce type of function %s\n",
-                        decl->func.name);
+                fprintf(stderr, LEPFX"unable to deduce type of function %s\n",
+                        decl->an_line, decl->func.name);
                 result = 0;
             }
             result &= check_if_fully_typed_params(decl->func.params, hierachy);
@@ -2181,8 +2195,8 @@ static _Bool check_if_fully_typed_root(DeclarationList* root)
           case DECL_BIND:
           {
             if (!solid_type(decl->binding.type)) {
-                tprintf(stderr, EPFX"unable to deduce type of let binding %P\n",
-                        decl->binding.pattern);
+                tprintf(stderr, LEPFX"unable to deduce type of let binding %P\n",
+                        decl->an_line, decl->binding.pattern);
                 result = 0;
             }
             if (decl->binding.pattern->tag == PAT_VAR) {
@@ -2200,8 +2214,8 @@ static _Bool check_if_fully_typed_root(DeclarationList* root)
           case DECL_EXTERN:
           {
             if (!solid_type(decl->ext.type)) {
-                fprintf(stderr, EPFX"external declaration without complete "
-                        "type: %s\n", decl->ext.name);
+                fprintf(stderr, LEPFX"external declaration without complete "
+                        "type: %s\n", decl->an_line, decl->ext.name);
                 result = 0;
             }
             break;
@@ -2265,7 +2279,7 @@ void check_runtime_properties(DeclarationList* root)
                   case DECL_TYPECTOR: break; // don't care about typectors
                 }
             } else if (decl->tag != DECL_TYPE) {
-                fprintf(stderr, EPFX"main has incorrect type\n");
+                fprintf(stderr, LEPFX"main has incorrect type\n", decl->an_line);
                 print_type_error(main_type, decl_type(decl, symbol("main")));
             }
         }
@@ -2273,4 +2287,3 @@ void check_runtime_properties(DeclarationList* root)
     fprintf(stderr, EPFX"no main function found\n  val main : unit -> int\n");
     exit(EXIT_FAILURE);
 }
-

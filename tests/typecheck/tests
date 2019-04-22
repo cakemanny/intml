@@ -111,7 +111,7 @@ expect_fail "let x = [| 1 ; () |]"
 expect_fail "let x = [| () ; 2 |]"
 expect_fail 'let x = [| "0" ; 1 |]'
 expect_fail 'let x = [| 1 ; "2" |]'
-# empty vector conforms to type of any other list
+# empty vector conforms to type of any other vector
 expect_pass "let x = [| 1 |] = [| |]"
 expect_pass "let x = ([| |] : string vector)"
 

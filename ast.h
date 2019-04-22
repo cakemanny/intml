@@ -567,7 +567,7 @@ Expr* match(Expr* matchexpr, CaseList* cases);
 Expr* direct_call(Symbol funcname, ExprList* args);
 
 /*
- * Creates an empty list of expressions (used in compund expressions like lists 
+ * Creates an empty list of expressions (used in compund expressions like lists
  * and vectors
  */
 ExprList* exprlist();
