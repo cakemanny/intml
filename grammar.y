@@ -17,6 +17,8 @@ extern FILE* yyin;
 
 static DeclarationList* tree = NULL;
 
+#define YYERROR_VERBOSE
+
 %}
 
 %union {

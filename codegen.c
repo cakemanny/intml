@@ -916,8 +916,8 @@ static void emit_fn_prologue(Function* func)
         }  else if (ssot_arg > 3 * WORD_SIZE) {
             // FIXME: do something here...
             fprintf(stderr, "TODO: support larger args sizes\n");
-            store(argument_offset(func), bp, r2);
-            store(argument_offset(func) + WORD_SIZE, bp, r3);
+            store(argument_offset(func), bp, r1);
+            store(argument_offset(func) + WORD_SIZE, bp, r2);
             store(argument_offset(func) + 2*WORD_SIZE, bp, r3);
         }
     }

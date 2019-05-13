@@ -1,6 +1,6 @@
 .SUFFIXES:
 
-SUFFIXES = .c .h .o .l. y .d
+SUFFIXES = .c .h .o .l .y .d
 
 CC=gcc
 CFLAGS=-std=gnu11 -g -Wall -fno-omit-frame-pointer
