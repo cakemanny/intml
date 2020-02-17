@@ -293,7 +293,7 @@ static void print_type_error(TypeExpr* expected, TypeExpr* actual)
 }
 
 #define foreach(list, varname, body) \
-for (typeof(*list)* varname = list; varname; varname = varname->next) { \
+for (__auto_type varname = list; varname; varname = varname->next) { \
     body \
 }
 
@@ -354,9 +354,9 @@ static TypeExprList* replaced_constraint_list(
     for (TypeExprList* l = toreplace; l; l = l->next) {
         tmp = type_add(tmp, replaced_constraint(l->type, constraint_id, theory));
     }
-    typeof(tmp) result = reversed_types(tmp);
+    __auto_type result = reversed_types(tmp);
     while (tmp) {
-        typeof(tmp) tmp2 = tmp->next;
+        __auto_type tmp2 = tmp->next;
         free((void*)tmp); // cast away const
         tmp = tmp2;
     }

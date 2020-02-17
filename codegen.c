@@ -392,6 +392,12 @@ static inline void ins1(const char* instr, const char* op)
 
 static void add(reg dst, reg op1, reg op2)
 {
+    // FIXME: we are conflating the idea of the target architecture with the
+    // architecture of the machine the compiler is running on.
+    // Instead, we should either use a struct of function pointers, a runtime
+    // loaded shared object library (e.g. dll), static library (with choice
+    // when building), or just use c `if` statements instead of preprocessor
+    // `if` statements
     #ifdef __x86_64__
         if (dst == op1) {
             ins2("addq", op2, dst); // left to right because we are AT&T syntax
@@ -843,6 +849,7 @@ static int stack_required(const Function* func)
             space += v->size;
         }
     }
+    // stack must be 16 byte aligned in case there are calls out to malloc
     assert(WORD_SIZE != 16 && 16 % WORD_SIZE == 0);
     while (space % 16 != 0) {
         space += WORD_SIZE;
