@@ -33,7 +33,10 @@ LD=ld
 LDFLAGS=
 LDLIBS=-lc
 if [[ $(uname) == "Darwin" ]]; then
-    LDFLAGS="$LDFLAGS -macosx_version_min $(sw_vers -productVersion)"
+    #CLT=$(xcode-select -p)
+    #LDFLAGS="$LDFLAGS -macosx_version_min $(sw_vers -productVersion) -L${CLT}/SDKs/MacOSX.sdk/usr/lib"
+    LDFLAGS="-fsanitize=address"
+    LD=cc
 fi
 
 expect2 () {
@@ -45,15 +48,15 @@ expect2 () {
         ./a.out
         result=$?
         if [[ $result == $2 ]]; then
-            echo "${grn}pass${rst}"
+            echo "${grn}pass${rst}: '$code'"
         else
-            echo "${red}FAIL:${rst} '$1'"
+            echo "${red}FAIL:${rst} '$code'"
             echo "  expected: $2"
             echo "  actual:   $result"
             exitcode=$((1 + $exitcode))
         fi
     else
-        echo "${red}FAILED${rst} to compile '$1'"
+        echo "${red}FAILED${rst} to compile '$code'"
         exitcode=$((1 + $exitcode))
     fi
     rm -f a.out $otmp $stmp

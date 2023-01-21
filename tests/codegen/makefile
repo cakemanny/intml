@@ -9,7 +9,10 @@ LDFLAGS=
 LDLIBS=-lc
 
 ifeq "$(PLATFORM)" "Darwin"
-  LDFLAGS += -macosx_version_min $(shell sw_vers -productVersion)
+  #CLT=$(shell xcode-select -p)
+  #LDFLAGS += -macosx_version_min $(shell sw_vers -productVersion) -L$(CLT)/SDKs/MacOSX.sdk/usr/lib
+  LDFLAGS = -fsanitize=address
+  LD=cc
 endif
 ifeq "$(OS)" "Windows_NT"
   # on windows it was easier just to use the C compiler to link

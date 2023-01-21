@@ -357,12 +357,26 @@ typedef const char* reg;
     static reg cs1 = "r6";
     static reg cs2 = "r7";
     static reg cs3 = "r8";
+#elif defined(__arm64__)
+    static reg r0 = "x0";
+    static reg r1 = "x1"; // first argument or second word of return
+    static reg r2 = "x2";
+    static reg r3 = "x3";
+    static reg t0 = "x16"; // inter procedure scratch registers aka x16, ip0
+    static reg t1 = "x17"; // aka ip1
+    static reg sp = "sp"; // aka x31
+    static reg bp = "fp"; // aka x29
+    static reg cs0 = "x19"; // callee-saved
+    static reg cs1 = "x20";
+    static reg cs2 = "x21";
+    static reg cs3 = "x22"; // x23 - x29 are also callee-saved
 #endif
 
 static inline void ins2(const char* instr, const char* lop, const char* rop)
 {
     fprintf(cgenout, "\t%s\t%s, %s\n", instr, lop, rop);
 }
+#if defined(__x86_64__)
 static inline void ins2_imm(const char* instr, long long immval, const char* rop)
 {
     #ifdef _WIN32
@@ -371,8 +385,9 @@ static inline void ins2_imm(const char* instr, long long immval, const char* rop
         fprintf(cgenout,"\t%s\t$%lld, %s\n", instr, immval, rop);
     #endif
 }
+#endif
 
-#ifdef __arm__
+#if defined(__arm__) || defined(__arm64__)
   static inline void ins2_imm_rtl(const char* instr, const char* lop, int immval)
   {
       fprintf(cgenout, "	%s	%s, #%d\n", instr, lop, immval);
@@ -383,12 +398,20 @@ static inline void ins2_imm(const char* instr, long long immval, const char* rop
   {
       fprintf(cgenout, "	%s	%s, %s, %s\n", instr, dst, lop, rop);
   }
+
+  static inline void ins3_imm_rtl(
+          const char* instr, const char* dst, const char* lop, int immval)
+  {
+      fprintf(cgenout, "	%s	%s, %s, #%d\n", instr, dst, lop, immval);
+  }
 #endif
 
+#if defined(__x86_64__)
 static inline void ins1(const char* instr, const char* op)
 {
     fprintf(cgenout, "\t%s\t%s\n", instr, op);
 }
+#endif
 
 static void add(reg dst, reg op1, reg op2)
 {
@@ -415,8 +438,12 @@ static inline void add_imm(reg dst, long long amount)
 {
     #ifdef __x86_64__
         ins2_imm("addq", amount, dst);
-    #else
+    #elif defined(__arm__)
         ins2_imm_rtl("add", dst, amount);
+    #elif defined(__arm64__)
+        ins3_imm_rtl("add", dst, dst, amount);
+    #else
+        #error "UP"
     #endif
 }
 static void mul(reg dst, reg op1, reg op2)
@@ -454,8 +481,12 @@ static inline void sub_imm(reg dst, long long amount)
 {
     #ifdef __x86_64__
         ins2_imm("subq", amount, dst);
-    #else
+    #elif defined(__arm__)
         ins2_imm_rtl("sub", dst, amount);
+    #elif defined(__arm64__)
+        ins3_imm_rtl("sub", dst, dst, amount);
+    #else
+        #error "UP"
     #endif
 }
 
@@ -482,10 +513,16 @@ static void loadc(reg dst, reg src, int off, const char* comment)
         fprintf(cgenout,"\tmovq\t%d(%s), %s", off, src, dst);
         if (comment) fprintf(cgenout,"\t\t# %s\n", comment);
         else fputs("\n", cgenout);
-    #else
+    #elif __arm__
         fprintf(cgenout, "	ldr	%s, [%s, #%d]", dst, src, off);
         if (comment) fprintf(cgenout, "\t\t@@ %s\n", comment);
         else fputs("\n", cgenout);
+    #elif __arm64__
+        fprintf(cgenout, "	ldr	%s, [%s, #%d]", dst, src, off);
+        if (comment) fprintf(cgenout, "\t\t; @ %s\n", comment);
+        else fputs("\n", cgenout);
+    #else
+        #error "UP"
     #endif
 }
 
@@ -504,13 +541,18 @@ static void load(reg dst, reg src, int off)
 {
     loadc(dst, src, off, NULL);
 }
+
 static void load2(reg base, reg op0, reg op1)
 {
     #ifdef __x86_64__
         load(op0, base, 0);
         load(op1, base, WORD_SIZE);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "	ldm	%s, {%s,%s}\n", base, op0, op1);
+    #elif defined(__arm64__)
+        fprintf(cgenout, "	ldp	%s, %s, [%s]\n", op0, op1, base);
+    #else
+        #error "UP"
     #endif
 }
 static void load3(reg base, reg op0, reg op1, reg op2)
@@ -519,8 +561,13 @@ static void load3(reg base, reg op0, reg op1, reg op2)
         load(op0, base, 0 * WORD_SIZE);
         load(op1, base, 1 * WORD_SIZE);
         load(op2, base, 2 * WORD_SIZE);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "	ldm	%s, {%s,%s,%s}\n", base, op0, op1, op2);
+    #elif defined(__arm64__)
+        load2(base, op0, op1);
+        load(op2, base, 2 * WORD_SIZE);
+    #else
+        #error "UP"
     #endif
 }
 static void load4(reg base, reg op0, reg op1, reg op2, reg op3)
@@ -530,8 +577,14 @@ static void load4(reg base, reg op0, reg op1, reg op2, reg op3)
         load(op1, base, 1 * WORD_SIZE);
         load(op2, base, 2 * WORD_SIZE);
         load(op3, base, 3 * WORD_SIZE);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "	ldm	%s, {%s,%s,%s,%s}\n", base, op0, op1, op2, op3);
+    #elif defined(__arm64__)
+        load2(base, op0, op1);
+        fprintf(cgenout, "	ldp	%s, %s, [%s, #%lu]\n", op0, op1, base,
+                2 * WORD_SIZE);
+    #else
+        #error "UP"
     #endif
 }
 
@@ -539,9 +592,11 @@ static void store(int off, reg dst, reg src)
 {
     #ifdef __x86_64__
         fprintf(cgenout,"\tmovq\t%s, %d(%s)\n", src, off, dst);
-    #else
+    #elif defined(__arm__) || defined(__arm64__)
         // TODO: need to handle case where offset is not a rotated byte
         fprintf(cgenout, "	str	%s, [%s, #%d]\n", src, dst, off);
+    #else
+        #error "UP"
     #endif
 }
 
@@ -550,8 +605,12 @@ static void store2(reg base, reg op0, reg op1)
     #ifdef __x86_64__
         store(0 * WORD_SIZE, base, op0);
         store(1 * WORD_SIZE, base, op1);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "	stm	%s, {%s, %s}\n", base, op0, op1);
+    #elif defined(__arm64__)
+        fprintf(cgenout, "	stp	%s, %s, [%s]\n", op0, op1, base);
+    #else
+        #error "UP"
     #endif
 }
 
@@ -561,8 +620,13 @@ static void store3(reg base, reg op0, reg op1, reg op2)
         store(0 * WORD_SIZE, base, op0);
         store(1 * WORD_SIZE, base, op1);
         store(2 * WORD_SIZE, base, op2);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "	stm	%s, {%s, %s, %s}\n", base, op0, op1, op2);
+    #elif defined(__arm64__)
+        store2(base, op0, op1);
+        store(2 * WORD_SIZE, base, op2);
+    #else
+        #error "UP"
     #endif
 }
 
@@ -601,39 +665,86 @@ static void mov(reg dst, reg src)
     #endif
 }
 
+
+#ifndef __arm64__
 static void pop(reg dst)
 {
     #ifdef __x86_64__
         ins1("popq", dst);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "\tpop\t{%s}\n", dst);
+    #elif defined(__arm64__)
+        #error "No unaligned pop on arm64"
+    #else
+        #error "UP"
+    #endif
+}
+#endif
+
+static void pop_aligned(reg dst)
+{
+    #ifdef __x86_64__
+        assert(! "TODO");
+    #elif defined(__arm__)
+        assert(! "TODO");
+    #elif defined(__arm64__)
+        fprintf(cgenout, "\tldr\t%s, [sp], #16\n", dst);
+    #else
+        #error "UP"
     #endif
 }
 static void pop2(reg dst0, reg dst1)
 {
     #ifdef __x86_64__
         pop(dst0); pop(dst1);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "\tpop\t{%s,%s}\n", dst0, dst1);
+    #elif defined(__arm64__)
+        fprintf(cgenout, "\tldp\t%s, %s, [sp], #16\n", dst0, dst1);
+    #else
+        #error "UP"
     #endif
 }
 static void pop4(reg dst0, reg dst1, reg dst2, reg dst3)
 {
     #ifdef __x86_64__
         pop(dst0); pop(dst1); pop(dst2); pop(dst3);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "\tpop\t{%s,%s,%s,%s}\n", dst0, dst1, dst2, dst3);
+    #elif defined(__arm64__)
+        // I'm not sure about this...
+        pop2(dst2, dst3);
+        pop2(dst0, dst1);
+    #else
+        #error "UP"
     #endif
 }
 
-static void popd() /* Discard item on stack*/ { add_imm(sp, WORD_SIZE); }
-
+#ifndef __arm64__
 static void push(reg op0)
 {
     #ifdef __x86_64__
         ins1("pushq", op0);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "\tpush\t{%s}\n", op0);
+    #elif defined(__arm64__)
+        #error "No unaligned push on arm64"
+    #else
+        #error "UP"
+    #endif
+}
+#endif
+
+static void push_aligned(reg op0)
+{
+    #ifdef __x86_64__
+        assert(! "TODO");
+    #elif defined(__arm__)
+        assert(! "TODO");
+    #elif defined(__arm64__)
+        fprintf(cgenout, "\tstr\t%s, [sp, #-16]!\n", op0);
+    #else
+        #error "UP"
     #endif
 }
 /* equivalent to push(op1) and then push(op0) */
@@ -641,8 +752,12 @@ static void push2(reg op0, reg op1)
 {
     #ifdef __x86_64__
         push(op1); push(op0);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "\tpush\t{%s,%s}\n", op0, op1);
+    #elif defined(__arm64__)
+        fprintf(cgenout, "\tstp\t%s, %s, [sp, #-16]!\n", op0, op1);
+    #else
+        #error "UP"
     #endif
 }
 /* equivalent to push(op3)...push(op0) */
@@ -650,12 +765,16 @@ static void push4(reg op0, reg op1, reg op2, reg op3)
 {
     #ifdef __x86_64__
         push(op3); push(op2); push(op1); push(op0);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "\tpush\t{%s,%s,%s,%s}\n", op0, op1, op2, op3);
+    #elif defined(__arm64__)
+        // I'm not sure about this...
+        push2(op2, op3);
+        push2(op0, op1);
+    #else
+        #error "UP"
     #endif
 }
-
-static void pushd() /* used to align the stack */ { sub_imm(sp, WORD_SIZE); }
 
 static void cmp(reg left, reg right)
 {
@@ -692,8 +811,15 @@ static void load_label(reg dst, const char* lbl)
 {
     #ifdef __x86_64__
         fprintf(cgenout, "\tleaq\t%s(%s), %s\n", lbl, "%rip", dst);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "	ldr	%s, =%s\n", dst, lbl);
+    #elif defined(__arm64__)
+        // Maybe adr would work ok too ...
+        fprintf(cgenout, "	adrp	%s, %s@PAGE\n", dst, lbl);
+        fprintf(cgenout, "	add	%s, %s, %s@PAGEOFF\n", dst, dst, lbl);
+    #else
+        fprintf(cgenout, "	adr	%s, %s\n", dst, lbl);
+        #error "UP"
     #endif
 }
 static void load_tmplabel(reg dst, int label_number)
@@ -706,40 +832,59 @@ static void beq(int label) // branch equal
 {
     #ifdef __x86_64__
         fprintf(cgenout, "\tje\tL%d\n", label);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "\tbeq\tL%d\n", label);
+    #elif defined(__arm64__)
+        fprintf(cgenout, "\tb.eq\tL%d\n", label);
+    #else
+        #error "UP"
     #endif
 }
 static void bne(int label) // branch equal
 {
     #ifdef __x86_64__
         fprintf(cgenout, "\tjne\tL%d\n", label);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "\tbne\tL%d\n", label);
+    #elif defined(__arm64__)
+        fprintf(cgenout, "\tb.ne\tL%d\n", label);
+    #else
+        #error "UP"
     #endif
 }
 static void bgt(int label) // branch equal
 {
     #ifdef __x86_64__
         fprintf(cgenout, "\tjg\tL%d\n", label);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "\tbgt\tL%d\n", label);
+    #elif defined(__arm64__)
+        fprintf(cgenout, "\tb.gt\tL%d\n", label);
+    #else
+        #error "UP"
     #endif
 }
 static void bge(int label) // branch equal
 {
     #ifdef __x86_64__
         fprintf(cgenout, "\tjge\tL%d\n", label);
-    #else
         fprintf(cgenout, "\tbge\tL%d\n", label);
+    #elif defined(__arm__)
+        fprintf(cgenout, "\tbge\tL%d\n", label);
+    #elif defined(__arm64__)
+        fprintf(cgenout, "\tb.ge\tL%d\n", label);
+    #else
+        #error "UP"
     #endif
 }
 static void b(int label)
 {
     #ifdef __x86_64__
         fprintf(cgenout, "\tjmp\tL%d\n", label);
-    #else
+    #elif defined(__arm__) || defined(__arm64__)
         fprintf(cgenout, "\tb\tL%d\n", label);
+    #else
+        #error "UP"
     #endif
 }
 
@@ -759,8 +904,12 @@ static void movne(reg dst, reg src)
 {
     #ifdef __x86_64__
         ins2("cmovneq", src, dst);
-    #else
+    #elif defined(__arm__)
         ins2("movne", dst, src);
+    #elif defined(__arm64__)
+      fprintf(cgenout, "	csel	%s, %s, %s, ne\n", dst, src, dst);
+    #else
+        #error "UP"
     #endif
 }
 
@@ -769,16 +918,22 @@ static void call_reg(reg op)
 {
     #ifdef __x86_64__
         fprintf(cgenout,"\tcallq\t*%s\n", op);
-    #else
+    #elif defined(__arm__)
         fprintf(cgenout, "\tblx\t%s\n", op);
+    #elif defined(__arm64__)
+        fprintf(cgenout, "\tblr\t%s\n", op);
+    #else
+        #error "UP"
     #endif
 }
 static void call(const char* label)
 {
     #ifdef __x86_64__
         fprintf(cgenout, "	callq	%s\n", label);
-    #else
+    #elif defined(__arm__) || defined(__arm64__)
         fprintf(cgenout, "	bl	%s\n", label);
+    #else
+        #error "UP"
     #endif
 }
 static void alloc(int size)
@@ -786,6 +941,9 @@ static void alloc(int size)
     // We will need to abstract out the (calling a function) idea at some point
 #if defined(__APPLE__) && defined(__x86_64__)
     mov_imm("%rdi", size);
+    call("_ml_gc_alloc");
+#elif defined(__APPLE__) && defined(__arm64__)
+    mov_imm(r0, size);
     call("_ml_gc_alloc");
 #elif defined(__linux__) && defined(__x86_64__)
     mov_imm("%rdi", size);
@@ -808,6 +966,9 @@ static void exit_imm(int exit_code)
 {
 #if defined(__APPLE__) && defined(__x86_64__)
     mov_imm("%rdi", exit_code);
+    call("__exit");
+#elif defined(__APPLE__) && defined(__arm64__)
+    mov_imm(r0, exit_code);
     call("__exit");
 #elif defined(__linux__) && defined(__x86_64__)
     mov_imm("%rdi", exit_code);
@@ -886,23 +1047,34 @@ static void emit_fn_prologue(Function* func)
     #ifdef __x86_64__
         // align function start to 2^4=16 byte boundary
         fprintf(cgenout, ".p2align	4, 0x90\n");
-    #else
+    #elif __arm__
         fprintf(cgenout, ".global	%s\n", lbl);
         fprintf(cgenout, ".p2align	2\n");
         fprintf(cgenout, ".type	%s,%%function\n", lbl);
+    #elif __arm64__
+        fprintf(cgenout, ".globl	%s\n", lbl);
+        fprintf(cgenout, ".p2align	2\n");
+    #else
+        #error "unknown platform"
     #endif
     fprintf(cgenout, "%s:\n", lbl);
     free(lbl);
     #ifdef __x86_64__
         fputs("\tpushq	%rbp\n", cgenout);
         fputs("\tmovq	%rsp, %rbp\n", cgenout);
-    #else
+    #elif __arm__
         fputs("\t.fnstart\n", cgenout);
         fputs("\t.save	{r4, fp, lr}\n", cgenout);
         fputs("\tpush	{r4, fp, lr}\n", cgenout);
         fputs("\t.setfp	fp, sp\n", cgenout);
         fputs("\tmov	fp, sp\n", cgenout);
         fprintf(cgenout, "\t.pad	#%d\n", stack_required(func));
+    #elif __arm64__
+        fputs("\t.cfi_startproc\n", cgenout);
+        // save the frame pointer and link register
+        fputs("\tstp	x29, x30, [sp, #-16]!\n", cgenout); // push
+    #else
+        #error "unknown platform"
     #endif
     sub_imm(sp, stack_required(func));
     // Move ptr to closure into stack location
@@ -938,7 +1110,7 @@ static void emit_fn_epilogue(Function* func)
 	popq	%rbp\n\
 	retq\n\
 ", cgenout);
-#else
+#elif __arm__
     fputs("\tmov sp, fp\n", cgenout);
     fputs("\tpop	{r4, fp, pc}\n", cgenout);
     char* lbl = function_label(func);
@@ -946,6 +1118,14 @@ static void emit_fn_epilogue(Function* func)
     fprintf(cgenout, "\t.cantunwind\n");
     fprintf(cgenout, "\t.fnend\n");
     free(lbl);
+#elif __arm64__
+    fprintf(cgenout ,"\tadd\tsp, sp, #%d\n", stack_required(func));
+    // pop the frame pointer and link register back off the stack
+    fputs("\tldp	x29, x30, [sp], #16\n", cgenout); // pop
+    fputs("\tret\n", cgenout);
+    fputs("\t.cfi_endproc\n", cgenout);
+#else
+    #error "unknown architecture"
 #endif
 }
 
@@ -1023,15 +1203,13 @@ static void gen_list_from_end(ExprList* list, int node_size)
     if (list) {
         // put the tail of list in r0
         gen_list_from_end(list->next, node_size);
-        push(r0); // save address of tail
-        pushd(); // align stack
+        push_aligned(r0); // save address of tail
         gen_stack_machine_code(list->expr); // result now in r0, r1, ...
         // ASSUMING elem size == WORD_SIZE
         if (node_size >= 4 * WORD_SIZE) mov(r3, r2);
         if (node_size >= 3 * WORD_SIZE) mov(r2, r1);
         mov(r1, r0); // data goes into word 2
-        popd();  // return stack pointer to point at our prev r0
-        pop(r0); // the address of the tail.
+        pop_aligned(r0); // the address of the tail.
 
         // Save the generated value on the stack...
         if (node_size >= 3 * WORD_SIZE) {
@@ -1150,10 +1328,10 @@ static void gen_sm_unapply_pat(Pattern* pat)
 
         // Save pnext on stack -- if pat->left is discard or var we can elide
         // this push (later in optimization excercise)
-        push(t1); // don't worry about stack alignment, promise we won't alloc
+        push_aligned(t1); // don't worry about stack alignment, promise we won't alloc
         // Store the result into the variable on the left side of the CONS
         gen_sm_unapply_pat(pat->left);
-        pop(t1);
+        pop_aligned(t1);
         cmp_imm(r0, 0LL); // but since left is a pattern, it may fail
         beq(end_of_matching);
 
@@ -1175,11 +1353,19 @@ static void gen_sm_unapply_pat(Pattern* pat)
         reg rs[4] = { cs0, cs1, cs2, cs3 };
         reg drs[4] = { r0, r1, r2, r3 };
         const int word_size_ctz = __builtin_ctz(WORD_SIZE);
+        fprintf(stderr, "word_size_ctz = %d\n", word_size_ctz);
         int stack_size = stack_size_of_type(pat->type);
+        // stack_size >> word_size_ctz calculates the number of registers
+        // required to store the tuple
+        int num_registers = stack_size >> word_size_ctz;
         // Shuffle data about
         dbg_comment("PAT_TUPLE: save acc to callee-saved registers");
-        for (int i = 0, n = stack_size >> word_size_ctz; i < n; i++) {
-            push(rs[n - 1 - i]); // Save r12-r15
+        if (stack_size > 2 * WORD_SIZE) {
+            push4(cs0, cs1, cs2, cs3);
+        } else {
+            push2(cs0, cs1);
+        }
+        for (int i = 0, n = num_registers; i < n; i++) {
             mov(rs[n - 1 - i], drs[n - 1 - i]); // copy r0-r3 int r12-r15
         }
         //  Fill variables with the data
@@ -1194,8 +1380,11 @@ static void gen_sm_unapply_pat(Pattern* pat)
         }
         // Shuffle data back
         dbg_comment("PAT_TUPLE: restore callee-saved registers");
-        for (int i = 0, n = stack_size >> word_size_ctz; i < n; i++) {
-            pop(rs[i]); // Restore r12-r15 per constract
+        // Restore scratched registers - r12-r15 per constact
+        if (stack_size > 2 * WORD_SIZE) {
+            pop4(cs0, cs1, cs2, cs3);
+        } else {
+            pop2(cs0, cs1);
         }
         break;
       }
@@ -1726,10 +1915,12 @@ static void gen_stack_machine_code(Expr* expr)
                 // push the words on in order
                 switch (stack_size_of_type(l->expr->type)) {
                     case 4 * WORD_SIZE:
-                    case 3 * WORD_SIZE: push(r0); push(r1); push(r2); push(r3);
+                        // This might be wrong. Maybe it should be the
+                        // other way around
+                    case 3 * WORD_SIZE: push4(r3, r2, r1, r0);
                                         break;
                     case 2 * WORD_SIZE:
-                    case 1 * WORD_SIZE: push(r0); push(r1);
+                    case 1 * WORD_SIZE: push2(r1, r0);
                     case 0:
                         break;
                     default: assert(0 && "TODO: any size tuple"); break;
@@ -1750,24 +1941,17 @@ static void gen_stack_machine_code(Expr* expr)
 
             // iterate backwars through the expression results and the
             // destination registers
-            reg rs[4] = { r0, r1, r2, r3 };
-            int j = -1 +
-                (stack_size_of_type(expr->type) >> __builtin_ctz(WORD_SIZE));
             for (int i = 3; i >= 0; --i) {
                 if (ls[i]) {
                     dbg_comment("TUPLE: load component %d" , i);
                     switch (stack_size_of_type(ls[i]->expr->type)) {
                         case 4 * WORD_SIZE: // all words important
-                            pop(rs[j--]);pop(rs[j--]);pop(rs[j--]);pop(rs[j--]);
-                            break;
                         case 3 * WORD_SIZE: // 1st word garbage
-                            popd();pop(rs[j--]);pop(rs[j--]);pop(rs[j--]);
+                            pop4(r3, r2, r1, r0);
                             break;
                         case 2 * WORD_SIZE: // both words important again
-                            pop(rs[j--]);pop(rs[j--]);
-                            break;
-                        case 1 * WORD_SIZE:
-                            popd();pop(rs[j--]);
+                        case 1 * WORD_SIZE: // 1st word junk
+                            pop2(r1, r0);
                             break;
                         case 0:
                             break;
@@ -1860,6 +2044,17 @@ _main:\n\
 	callq	_exit\n\
 	ud2\n\
 ", cgenout);
+#elif defined(__APPLE__) && defined(__arm64__)
+    fputs("\
+	.section	__TEXT,__text,regular,pure_instructions\n\
+	.globl	_main                           ; -- Begin function main\n\
+	.p2align	2\n\
+_main:\n\
+	mov		fp, sp		; @ initialize frame pointer\n\
+	bl		start__0	; @ will leave exit code in w0\n\
+        bl		_exit\n\
+	udf		#0xdead\n\
+", cgenout);
 #elif defined(__linux__) && defined(__x86_64__)
     fputs("\
 .section .interp\n\
@@ -1899,7 +2094,6 @@ main:\n\
 \n\
 ", cgenout);
 #else
-    // TODO: add linux arm support
 # error "Unsupported platform"
 #endif
 }

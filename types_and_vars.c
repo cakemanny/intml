@@ -696,16 +696,31 @@ static int theorise_equal(TypeExpr* etype, TypeExpr* newtype)
 __attribute__((const))
 static const char* expr_name(enum ExprTag tag)
 {
-    assert(tag != 0);
-    assert(tag <= MATCH_EXPR);
-    const char* expr_name[] = {
-        "", "plus", "minus", "multiply", "divide",
-        "equal",
-        "less than", "less than or equal",
-        "apply", "var", "unit", "int", "string", "recfunc",
-        "func", "let", "if", "list", "vector", "tuple", "match"
-    };
-    return expr_name[tag];
+    switch (tag) {
+        case PLUS: return "plus";
+        case MINUS: return "minus";
+        case MULTIPLY: return "multiply";
+        case DIVIDE: return "divide";
+        case EQUAL: return "equal";
+        case LESSTHAN: return "less than";
+        case LESSEQUAL: return "less than or equal";
+        case APPLY: return "apply";
+        case VAR: return "var";
+        case UNITVAL: return "unit";
+        case INTVAL: return "int";
+        case STRVAL: return "string";
+        case FUNC_EXPR: return "func";
+        case RECFUNC_EXPR: return "recfunc";
+        case BIND_EXPR: return "let";
+        case IF_EXPR: return "if";
+        case LIST: return "list";
+        case VECTOR: return "vector";
+        case TUPLE: return "tuple";
+        case EXTERN_EXPR: return "extern";
+        case MATCH_EXPR: return "match";
+        case DIRECT_CALL: return "direct-call";
+    }
+    FAIL_MISSED_CASE();
 }
 
 #define typexpr_equals_or_exit(LN,ET,AT,M,...) do {                     \

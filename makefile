@@ -12,6 +12,7 @@ RTCFLAGS=-std=gnu11 -Wall -fno-omit-frame-pointer
 ifndef NDEBUG
   ifneq "$(OS)" "Windows_NT"
     CFLAGS += -fsanitize=address
+    RTCFLAGS += -fsanitize=address
     LDFLAGS += -fsanitize=address
   endif
 else
