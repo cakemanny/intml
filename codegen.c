@@ -666,7 +666,7 @@ static void mov(reg dst, reg src)
 }
 
 
-#ifndef __arm64__
+#ifdef __x86_64__
 static void pop(reg dst)
 {
     #ifdef __x86_64__
@@ -686,7 +686,8 @@ static void pop_aligned(reg dst)
     #ifdef __x86_64__
         assert(! "TODO");
     #elif defined(__arm__)
-        assert(! "TODO");
+        fprintf(cgenout, "\tpop\t{%s}\n", dst);
+        add_imm(sp, WORD_SIZE);
     #elif defined(__arm64__)
         fprintf(cgenout, "\tldr\t%s, [sp], #16\n", dst);
     #else
@@ -705,6 +706,8 @@ static void pop2(reg dst0, reg dst1)
         #error "UP"
     #endif
 }
+
+/* opposite of push4 */
 static void pop4(reg dst0, reg dst1, reg dst2, reg dst3)
 {
     #ifdef __x86_64__
@@ -720,7 +723,42 @@ static void pop4(reg dst0, reg dst1, reg dst2, reg dst3)
     #endif
 }
 
-#ifndef __arm64__
+static void pop2_rev(reg dst0, reg dst1)
+{
+    #ifdef __x86_64__
+        pop(dst1); pop(dst0);
+    #elif defined(__arm__)
+        load(dst1, sp, 0 * WORD_SIZE);
+        load(dst0, sp, 1 * WORD_SIZE);
+        add_imm(sp, 2 * WORD_SIZE);
+    #elif defined(__arm64__)
+        fprintf(cgenout, "\tldp\t%s, %s, [sp], #16\n", dst1, dst0);
+    #else
+        #error "UP"
+    #endif
+}
+
+/* opposite of push4_rev */
+static void pop4_rev(reg dst0, reg dst1, reg dst2, reg dst3)
+{
+    #ifdef __x86_64__
+        pop(dst3); pop(dst2); pop(dst1); pop(dst0);
+    #elif defined(__arm__)
+        load(dst3, sp, 0 * WORD_SIZE);
+        load(dst2, sp, 1 * WORD_SIZE);
+        load(dst1, sp, 2 * WORD_SIZE);
+        load(dst0, sp, 3 * WORD_SIZE);
+        add_imm(sp, 4 * WORD_SIZE);
+    #elif defined(__arm64__)
+        // I'm not sure about this...
+        pop2_rev(dst2, dst3);
+        pop2_rev(dst0, dst2);
+    #else
+        #error "UP"
+    #endif
+}
+
+#ifdef __x86_64__
 static void push(reg op0)
 {
     #ifdef __x86_64__
@@ -740,7 +778,8 @@ static void push_aligned(reg op0)
     #ifdef __x86_64__
         assert(! "TODO");
     #elif defined(__arm__)
-        assert(! "TODO");
+        sub_imm(sp, WORD_SIZE);
+        fprintf(cgenout, "\tpush\t{%s}\n", op0);
     #elif defined(__arm64__)
         fprintf(cgenout, "\tstr\t%s, [sp, #-16]!\n", op0);
     #else
@@ -771,6 +810,45 @@ static void push4(reg op0, reg op1, reg op2, reg op3)
         // I'm not sure about this...
         push2(op2, op3);
         push2(op0, op1);
+    #else
+        #error "UP"
+    #endif
+}
+
+/* equivalent to push(op0), push(op1) */
+static void push2_rev(reg op0, reg op1)
+{
+    #ifdef __x86_64__
+        push(op0); push(op1);
+    #elif defined(__arm__)
+        // Cannot use single instruction since registers are not
+        // in order
+        sub_imm(sp, 2 * WORD_SIZE);
+        store(0 * WORD_SIZE, sp, op1);
+        store(1 * WORD_SIZE, sp, op0);
+    #elif defined(__arm64__)
+        fprintf(cgenout, "\tstp\t%s, %s, [sp, #-16]!\n", op1, op2);
+    #else
+        #error "UP"
+    #endif
+}
+
+/* equivalent to push(op0)...push(op3) */
+static void push4_rev(reg op0, reg op1, reg op2, reg op3)
+{
+    #ifdef __x86_64__
+        push(op0); push(op1); push(op2); push(op3);
+    #elif defined(__arm__)
+        // We use multiple instructions since the register numbers
+        // are not in order
+        sub_imm(sp, 4 * WORD_SIZE);
+        store(0 * WORD_SIZE, sp, op3);
+        store(1 * WORD_SIZE, sp, op2);
+        store(2 * WORD_SIZE, sp, op1);
+        store(3 * WORD_SIZE, sp, op0);
+    #elif defined(__arm64__)
+        push2_rev(op0, op1);
+        push2_rev(op2, op3);
     #else
         #error "UP"
     #endif
@@ -1917,10 +1995,10 @@ static void gen_stack_machine_code(Expr* expr)
                     case 4 * WORD_SIZE:
                         // This might be wrong. Maybe it should be the
                         // other way around
-                    case 3 * WORD_SIZE: push4(r3, r2, r1, r0);
+                    case 3 * WORD_SIZE: push4_rev(r0, r1, r2, r3);
                                         break;
                     case 2 * WORD_SIZE:
-                    case 1 * WORD_SIZE: push2(r1, r0);
+                    case 1 * WORD_SIZE: push2_rev(r0, r1);
                     case 0:
                         break;
                     default: assert(0 && "TODO: any size tuple"); break;
@@ -1947,11 +2025,11 @@ static void gen_stack_machine_code(Expr* expr)
                     switch (stack_size_of_type(ls[i]->expr->type)) {
                         case 4 * WORD_SIZE: // all words important
                         case 3 * WORD_SIZE: // 1st word garbage
-                            pop4(r3, r2, r1, r0);
+                            pop4_rev(r0, r1, r2, r3);
                             break;
                         case 2 * WORD_SIZE: // both words important again
                         case 1 * WORD_SIZE: // 1st word junk
-                            pop2(r1, r0);
+                            pop2_rev(r0, r1);
                             break;
                         case 0:
                             break;
