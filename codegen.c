@@ -638,6 +638,7 @@ static void store4(reg base, reg op0, reg op1, reg op2, reg op3)
         store(2 * WORD_SIZE, base, op2);
         store(3 * WORD_SIZE, base, op3);
     #else
+        assert(0 && "TODO");
         fprintf(cgenout, "	stm	%s, {%s, %s, %s, %s}\n",
                 base, op0, op1, op2, op3);
     #endif
@@ -723,6 +724,7 @@ static void pop4(reg dst0, reg dst1, reg dst2, reg dst3)
     #endif
 }
 
+/* equivalent of pop(dst1),...,pop(dst0) */
 static void pop2_rev(reg dst0, reg dst1)
 {
     #ifdef __x86_64__
@@ -739,6 +741,7 @@ static void pop2_rev(reg dst0, reg dst1)
 }
 
 /* opposite of push4_rev */
+/* equivalent of pop(dst3),...,pop(dst0) */
 static void pop4_rev(reg dst0, reg dst1, reg dst2, reg dst3)
 {
     #ifdef __x86_64__
@@ -827,7 +830,7 @@ static void push2_rev(reg op0, reg op1)
         store(0 * WORD_SIZE, sp, op1);
         store(1 * WORD_SIZE, sp, op0);
     #elif defined(__arm64__)
-        fprintf(cgenout, "\tstp\t%s, %s, [sp, #-16]!\n", op1, op2);
+        fprintf(cgenout, "\tstp\t%s, %s, [sp, #-16]!\n", op1, op0);
     #else
         #error "UP"
     #endif
@@ -1406,7 +1409,7 @@ static void gen_sm_unapply_pat(Pattern* pat)
 
         // Save pnext on stack -- if pat->left is discard or var we can elide
         // this push (later in optimization excercise)
-        push_aligned(t1); // don't worry about stack alignment, promise we won't alloc
+        push_aligned(t1);
         // Store the result into the variable on the left side of the CONS
         gen_sm_unapply_pat(pat->left);
         pop_aligned(t1);
@@ -1983,6 +1986,10 @@ static void gen_stack_machine_code(Expr* expr)
             // and there are only 6 argument registers on x86
             // Could have (char * char * ... * char) if char only takes up a
             // byte
+
+            // save t1, so we can use it as a scratch register
+            push_aligned(t1);
+
             assert(stack_size_of_type(expr->type) <= 4 * WORD_SIZE);
             assert(stack_size_of_type(expr->type) >= 2 * WORD_SIZE);
             for (ExprList* l = expr->expr_list; l; l = l->next) {
@@ -2019,24 +2026,46 @@ static void gen_stack_machine_code(Expr* expr)
 
             // iterate backwars through the expression results and the
             // destination registers
+            reg rs[4] = { r0, r1, r2, r3 };
+            int j = -1 +
+                (stack_size_of_type(expr->type) >> __builtin_ctz(WORD_SIZE));
             for (int i = 3; i >= 0; --i) {
                 if (ls[i]) {
                     dbg_comment("TUPLE: load component %d" , i);
                     switch (stack_size_of_type(ls[i]->expr->type)) {
-                        case 4 * WORD_SIZE: // all words important
-                        case 3 * WORD_SIZE: // 1st word garbage
-                            pop4_rev(r0, r1, r2, r3);
+                        case 4 * WORD_SIZE: { // all words important
+                            reg rx3 = rs[j--];
+                            reg rx2 = rs[j--];
+                            reg rx1 = rs[j--];
+                            reg rx0 = rs[j--];
+                            pop4_rev(rx0, rx1, rx2, rx3);
                             break;
-                        case 2 * WORD_SIZE: // both words important again
-                        case 1 * WORD_SIZE: // 1st word junk
-                            pop2_rev(r0, r1);
+                        }
+                        case 3 * WORD_SIZE: { // 1st word garbage
+                            reg rx2 = rs[j--];
+                            reg rx1 = rs[j--];
+                            reg rx0 = rs[j--];
+                            pop4_rev(rx0, rx1, rx2, t1);
                             break;
+                        }
+                        case 2 * WORD_SIZE: { // both words important again
+                            reg rx1 = rs[j--];
+                            reg rx0 = rs[j--];
+                            pop2_rev(rx0, rx1);
+                            break;
+                        }
+                        case 1 * WORD_SIZE: { // 1st word junk
+                            reg rx0 = rs[j--];
+                            pop2_rev(rx0, t1);
+                            break;
+                        }
                         case 0:
                             break;
                         default: assert(0 && "TODO: any size tuple"); break;
                     }
                 }
             }
+            pop_aligned(t1);
             break;
         }
         case EXTERN_EXPR: // it's quite similar...
