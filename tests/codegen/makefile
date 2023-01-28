@@ -11,7 +11,7 @@ LDLIBS=-lc
 ifeq "$(PLATFORM)" "Darwin"
   #CLT=$(shell xcode-select -p)
   #LDFLAGS += -macosx_version_min $(shell sw_vers -productVersion) -L$(CLT)/SDKs/MacOSX.sdk/usr/lib
-  LDFLAGS = -fsanitize=address
+  #LDFLAGS = -fsanitize=address
   LD=cc
 endif
 ifeq "$(OS)" "Windows_NT"

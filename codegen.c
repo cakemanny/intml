@@ -1163,6 +1163,7 @@ static void emit_fn_prologue(Function* func)
         fputs("\t.cfi_startproc\n", cgenout);
         // save the frame pointer and link register
         fputs("\tstp	x29, x30, [sp, #-16]!\n", cgenout); // push
+        fputs("\tmov	fp, sp\n", cgenout);
     #else
         #error "unknown platform"
     #endif
@@ -1261,8 +1262,10 @@ static int label_for_str_or_add(Symbol str_lit)
 #   define ASM_COMMENT "# "
 #elif defined(__arm__)
 #   define ASM_COMMENT "@ "
-#elif defined(__arm64__) || defined(__aarch64__)
+#elif defined(__arm64__)
 #   define ASM_COMMENT "; "
+#elif defined(__aarch64__)
+#   define ASM_COMMENT "// "
 #else
 #   error "Unknown Platform"
 #endif
@@ -1709,6 +1712,7 @@ static void gen_stack_machine_code(Expr* expr)
         }
         case EQUAL:
         {
+            // NB! This does not do structural comparison
             gen_sm_binop(expr); // only will work for single word values
             cmp(t0, r0);
             mov_imm(r0, 0LL);

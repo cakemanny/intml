@@ -58,5 +58,3 @@ void* ml_gc_alloc(size_t size)
     }
     return malloc(size);
 }
-
-

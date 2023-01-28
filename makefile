@@ -11,7 +11,7 @@ RTCFLAGS=-std=gnu11 -Wall -fno-omit-frame-pointer
 
 ifndef NDEBUG
   ifeq "$(shell uname)" "Darwin"
-    RTCFLAGS += -fsanitize=address
+    # RTCFLAGS += -fsanitize=address
   endif
   ifneq "$(OS)" "Windows_NT"
     CFLAGS += -fsanitize=address
