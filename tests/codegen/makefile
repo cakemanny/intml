@@ -44,7 +44,7 @@ test: tests $(TARGETS)
 	as -o $@ $<
 
 %.s: %.ml ../../intml
-	../../intml -o $@ $<
+	ASAN_OPTIONS=detect_leaks=0 ../../intml -o $@ $<
 
 %: %.o ../../runtime.a
 	$(LD) $(LDFLAGS) -o $@ $< ../../runtime.a $(LDLIBS)

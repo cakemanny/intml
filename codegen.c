@@ -357,7 +357,7 @@ typedef const char* reg;
     static reg cs1 = "r6";
     static reg cs2 = "r7";
     static reg cs3 = "r8";
-#elif defined(__arm64__)
+#elif defined(__arm64__) || defined(__aarch64__)
     static reg r0 = "x0";
     static reg r1 = "x1"; // first argument or second word of return
     static reg r2 = "x2";
@@ -370,6 +370,8 @@ typedef const char* reg;
     static reg cs1 = "x20";
     static reg cs2 = "x21";
     static reg cs3 = "x22"; // x23 - x29 are also callee-saved
+#else
+    #error "Unknown platform"
 #endif
 
 static inline void ins2(const char* instr, const char* lop, const char* rop)
@@ -387,7 +389,7 @@ static inline void ins2_imm(const char* instr, long long immval, const char* rop
 }
 #endif
 
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm__) || defined(__arm64__) || defined(__aarch64__)
   static inline void ins2_imm_rtl(const char* instr, const char* lop, int immval)
   {
       fprintf(cgenout, "	%s	%s, #%d\n", instr, lop, immval);
@@ -440,10 +442,10 @@ static inline void add_imm(reg dst, long long amount)
         ins2_imm("addq", amount, dst);
     #elif defined(__arm__)
         ins2_imm_rtl("add", dst, amount);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         ins3_imm_rtl("add", dst, dst, amount);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 static void mul(reg dst, reg op1, reg op2)
@@ -483,10 +485,10 @@ static inline void sub_imm(reg dst, long long amount)
         ins2_imm("subq", amount, dst);
     #elif defined(__arm__)
         ins2_imm_rtl("sub", dst, amount);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         ins3_imm_rtl("sub", dst, dst, amount);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -513,16 +515,20 @@ static void loadc(reg dst, reg src, int off, const char* comment)
         fprintf(cgenout,"\tmovq\t%d(%s), %s", off, src, dst);
         if (comment) fprintf(cgenout,"\t\t# %s\n", comment);
         else fputs("\n", cgenout);
-    #elif __arm__
+    #elif defined(__arm__)
         fprintf(cgenout, "	ldr	%s, [%s, #%d]", dst, src, off);
         if (comment) fprintf(cgenout, "\t\t@@ %s\n", comment);
         else fputs("\n", cgenout);
-    #elif __arm64__
+    #elif defined(__APPLE__) && defined(__arm64__)
         fprintf(cgenout, "	ldr	%s, [%s, #%d]", dst, src, off);
-        if (comment) fprintf(cgenout, "\t\t; @ %s\n", comment);
+        if (comment) fprintf(cgenout, "\t\t; %s\n", comment);
+        else fputs("\n", cgenout);
+    #elif defined(__linux__) && defined(__aarch64__)
+        fprintf(cgenout, "	ldr	%s, [%s, #%d]", dst, src, off);
+        if (comment) fprintf(cgenout, "\t\t// %s\n", comment);
         else fputs("\n", cgenout);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -549,10 +555,10 @@ static void load2(reg base, reg op0, reg op1)
         load(op1, base, WORD_SIZE);
     #elif defined(__arm__)
         fprintf(cgenout, "	ldm	%s, {%s,%s}\n", base, op0, op1);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "	ldp	%s, %s, [%s]\n", op0, op1, base);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 static void load3(reg base, reg op0, reg op1, reg op2)
@@ -563,11 +569,11 @@ static void load3(reg base, reg op0, reg op1, reg op2)
         load(op2, base, 2 * WORD_SIZE);
     #elif defined(__arm__)
         fprintf(cgenout, "	ldm	%s, {%s,%s,%s}\n", base, op0, op1, op2);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         load2(base, op0, op1);
         load(op2, base, 2 * WORD_SIZE);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 static void load4(reg base, reg op0, reg op1, reg op2, reg op3)
@@ -579,12 +585,12 @@ static void load4(reg base, reg op0, reg op1, reg op2, reg op3)
         load(op3, base, 3 * WORD_SIZE);
     #elif defined(__arm__)
         fprintf(cgenout, "	ldm	%s, {%s,%s,%s,%s}\n", base, op0, op1, op2, op3);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         load2(base, op0, op1);
         fprintf(cgenout, "	ldp	%s, %s, [%s, #%lu]\n", op0, op1, base,
                 2 * WORD_SIZE);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -592,11 +598,11 @@ static void store(int off, reg dst, reg src)
 {
     #ifdef __x86_64__
         fprintf(cgenout,"\tmovq\t%s, %d(%s)\n", src, off, dst);
-    #elif defined(__arm__) || defined(__arm64__)
+    #elif defined(__arm__) || defined(__arm64__) || defined(__aarch64__)
         // TODO: need to handle case where offset is not a rotated byte
         fprintf(cgenout, "	str	%s, [%s, #%d]\n", src, dst, off);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -607,10 +613,10 @@ static void store2(reg base, reg op0, reg op1)
         store(1 * WORD_SIZE, base, op1);
     #elif defined(__arm__)
         fprintf(cgenout, "	stm	%s, {%s, %s}\n", base, op0, op1);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "	stp	%s, %s, [%s]\n", op0, op1, base);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -622,11 +628,11 @@ static void store3(reg base, reg op0, reg op1, reg op2)
         store(2 * WORD_SIZE, base, op2);
     #elif defined(__arm__)
         fprintf(cgenout, "	stm	%s, {%s, %s, %s}\n", base, op0, op1, op2);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         store2(base, op0, op1);
         store(2 * WORD_SIZE, base, op2);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -674,10 +680,10 @@ static void pop(reg dst)
         ins1("popq", dst);
     #elif defined(__arm__)
         fprintf(cgenout, "\tpop\t{%s}\n", dst);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         #error "No unaligned pop on arm64"
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 #endif
@@ -689,10 +695,10 @@ static void pop_aligned(reg dst)
     #elif defined(__arm__)
         fprintf(cgenout, "\tpop\t{%s}\n", dst);
         add_imm(sp, WORD_SIZE);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "\tldr\t%s, [sp], #16\n", dst);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 static void pop2(reg dst0, reg dst1)
@@ -701,10 +707,10 @@ static void pop2(reg dst0, reg dst1)
         pop(dst0); pop(dst1);
     #elif defined(__arm__)
         fprintf(cgenout, "\tpop\t{%s,%s}\n", dst0, dst1);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "\tldp\t%s, %s, [sp], #16\n", dst0, dst1);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -715,12 +721,12 @@ static void pop4(reg dst0, reg dst1, reg dst2, reg dst3)
         pop(dst0); pop(dst1); pop(dst2); pop(dst3);
     #elif defined(__arm__)
         fprintf(cgenout, "\tpop\t{%s,%s,%s,%s}\n", dst0, dst1, dst2, dst3);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         // I'm not sure about this...
         pop2(dst2, dst3);
         pop2(dst0, dst1);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -733,10 +739,10 @@ static void pop2_rev(reg dst0, reg dst1)
         load(dst1, sp, 0 * WORD_SIZE);
         load(dst0, sp, 1 * WORD_SIZE);
         add_imm(sp, 2 * WORD_SIZE);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "\tldp\t%s, %s, [sp], #16\n", dst1, dst0);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -752,12 +758,12 @@ static void pop4_rev(reg dst0, reg dst1, reg dst2, reg dst3)
         load(dst1, sp, 2 * WORD_SIZE);
         load(dst0, sp, 3 * WORD_SIZE);
         add_imm(sp, 4 * WORD_SIZE);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         // I'm not sure about this...
         pop2_rev(dst2, dst3);
         pop2_rev(dst0, dst2);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -768,10 +774,10 @@ static void push(reg op0)
         ins1("pushq", op0);
     #elif defined(__arm__)
         fprintf(cgenout, "\tpush\t{%s}\n", op0);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         #error "No unaligned push on arm64"
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 #endif
@@ -783,10 +789,10 @@ static void push_aligned(reg op0)
     #elif defined(__arm__)
         sub_imm(sp, WORD_SIZE);
         fprintf(cgenout, "\tpush\t{%s}\n", op0);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "\tstr\t%s, [sp, #-16]!\n", op0);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 /* equivalent to push(op1) and then push(op0) */
@@ -796,10 +802,10 @@ static void push2(reg op0, reg op1)
         push(op1); push(op0);
     #elif defined(__arm__)
         fprintf(cgenout, "\tpush\t{%s,%s}\n", op0, op1);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "\tstp\t%s, %s, [sp, #-16]!\n", op0, op1);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 /* equivalent to push(op3)...push(op0) */
@@ -809,12 +815,12 @@ static void push4(reg op0, reg op1, reg op2, reg op3)
         push(op3); push(op2); push(op1); push(op0);
     #elif defined(__arm__)
         fprintf(cgenout, "\tpush\t{%s,%s,%s,%s}\n", op0, op1, op2, op3);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         // I'm not sure about this...
         push2(op2, op3);
         push2(op0, op1);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -829,10 +835,10 @@ static void push2_rev(reg op0, reg op1)
         sub_imm(sp, 2 * WORD_SIZE);
         store(0 * WORD_SIZE, sp, op1);
         store(1 * WORD_SIZE, sp, op0);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "\tstp\t%s, %s, [sp, #-16]!\n", op1, op0);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -849,11 +855,11 @@ static void push4_rev(reg op0, reg op1, reg op2, reg op3)
         store(1 * WORD_SIZE, sp, op2);
         store(2 * WORD_SIZE, sp, op1);
         store(3 * WORD_SIZE, sp, op0);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         push2_rev(op0, op1);
         push2_rev(op2, op3);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -898,9 +904,12 @@ static void load_label(reg dst, const char* lbl)
         // Maybe adr would work ok too ...
         fprintf(cgenout, "	adrp	%s, %s@PAGE\n", dst, lbl);
         fprintf(cgenout, "	add	%s, %s, %s@PAGEOFF\n", dst, dst, lbl);
+    #elif defined(__aarch64__)
+        fprintf(cgenout, "	adrp	%s, %s\n", dst, lbl);
+        fprintf(cgenout, "	add	%s, %s, :lo12:%s\n", dst, dst, lbl);
     #else
         fprintf(cgenout, "	adr	%s, %s\n", dst, lbl);
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 static void load_tmplabel(reg dst, int label_number)
@@ -915,10 +924,10 @@ static void beq(int label) // branch equal
         fprintf(cgenout, "\tje\tL%d\n", label);
     #elif defined(__arm__)
         fprintf(cgenout, "\tbeq\tL%d\n", label);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "\tb.eq\tL%d\n", label);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 static void bne(int label) // branch equal
@@ -927,10 +936,10 @@ static void bne(int label) // branch equal
         fprintf(cgenout, "\tjne\tL%d\n", label);
     #elif defined(__arm__)
         fprintf(cgenout, "\tbne\tL%d\n", label);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "\tb.ne\tL%d\n", label);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 static void bgt(int label) // branch equal
@@ -939,10 +948,10 @@ static void bgt(int label) // branch equal
         fprintf(cgenout, "\tjg\tL%d\n", label);
     #elif defined(__arm__)
         fprintf(cgenout, "\tbgt\tL%d\n", label);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "\tb.gt\tL%d\n", label);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 static void bge(int label) // branch equal
@@ -952,20 +961,20 @@ static void bge(int label) // branch equal
         fprintf(cgenout, "\tbge\tL%d\n", label);
     #elif defined(__arm__)
         fprintf(cgenout, "\tbge\tL%d\n", label);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "\tb.ge\tL%d\n", label);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 static void b(int label)
 {
     #ifdef __x86_64__
         fprintf(cgenout, "\tjmp\tL%d\n", label);
-    #elif defined(__arm__) || defined(__arm64__)
+    #elif defined(__arm__) || defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "\tb\tL%d\n", label);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -987,10 +996,10 @@ static void movne(reg dst, reg src)
         ins2("cmovneq", src, dst);
     #elif defined(__arm__)
         ins2("movne", dst, src);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
       fprintf(cgenout, "	csel	%s, %s, %s, ne\n", dst, src, dst);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 
@@ -1001,20 +1010,20 @@ static void call_reg(reg op)
         fprintf(cgenout,"\tcallq\t*%s\n", op);
     #elif defined(__arm__)
         fprintf(cgenout, "\tblx\t%s\n", op);
-    #elif defined(__arm64__)
+    #elif defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "\tblr\t%s\n", op);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 static void call(const char* label)
 {
     #ifdef __x86_64__
         fprintf(cgenout, "	callq	%s\n", label);
-    #elif defined(__arm__) || defined(__arm64__)
+    #elif defined(__arm__) || defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, "	bl	%s\n", label);
     #else
-        #error "UP"
+        #error "Unknown platform"
     #endif
 }
 static void alloc(int size)
@@ -1029,7 +1038,7 @@ static void alloc(int size)
 #elif defined(__linux__) && defined(__x86_64__)
     mov_imm("%rdi", size);
     call("ml_gc_alloc");
-#elif defined(__linux__) && defined(__arm__)
+#elif defined(__linux__) && (defined(__arm__) || defined(__aarch64__))
     mov_imm(r0, size);
     call("ml_gc_alloc");
 #elif defined(_WIN32) && defined(__x86_64__)
@@ -1054,7 +1063,7 @@ static void exit_imm(int exit_code)
 #elif defined(__linux__) && defined(__x86_64__)
     mov_imm("%rdi", exit_code);
     call("_exit");
-#elif defined(__linux__) && defined(__arm__)
+#elif defined(__linux__) && (defined(__arm__) || defined(__aarch64__))
     mov_imm(r0, exit_code);
     call("_exit");
 #elif defined(_WIN32) && defined(__x86_64__)
@@ -1128,11 +1137,11 @@ static void emit_fn_prologue(Function* func)
     #ifdef __x86_64__
         // align function start to 2^4=16 byte boundary
         fprintf(cgenout, ".p2align	4, 0x90\n");
-    #elif __arm__
+    #elif defined(__arm__)
         fprintf(cgenout, ".global	%s\n", lbl);
         fprintf(cgenout, ".p2align	2\n");
         fprintf(cgenout, ".type	%s,%%function\n", lbl);
-    #elif __arm64__
+    #elif defined(__arm64__) || defined(__aarch64__)
         fprintf(cgenout, ".globl	%s\n", lbl);
         fprintf(cgenout, ".p2align	2\n");
     #else
@@ -1143,14 +1152,14 @@ static void emit_fn_prologue(Function* func)
     #ifdef __x86_64__
         fputs("\tpushq	%rbp\n", cgenout);
         fputs("\tmovq	%rsp, %rbp\n", cgenout);
-    #elif __arm__
+    #elif defined(__arm__)
         fputs("\t.fnstart\n", cgenout);
         fputs("\t.save	{r4, fp, lr}\n", cgenout);
         fputs("\tpush	{r4, fp, lr}\n", cgenout);
         fputs("\t.setfp	fp, sp\n", cgenout);
         fputs("\tmov	fp, sp\n", cgenout);
         fprintf(cgenout, "\t.pad	#%d\n", stack_required(func));
-    #elif __arm64__
+    #elif defined(__arm64__) || defined(__aarch64__)
         fputs("\t.cfi_startproc\n", cgenout);
         // save the frame pointer and link register
         fputs("\tstp	x29, x30, [sp, #-16]!\n", cgenout); // push
@@ -1191,7 +1200,7 @@ static void emit_fn_epilogue(Function* func)
 	popq	%rbp\n\
 	retq\n\
 ", cgenout);
-#elif __arm__
+#elif defined(__arm__)
     fputs("\tmov sp, fp\n", cgenout);
     fputs("\tpop	{r4, fp, pc}\n", cgenout);
     char* lbl = function_label(func);
@@ -1199,12 +1208,17 @@ static void emit_fn_epilogue(Function* func)
     fprintf(cgenout, "\t.cantunwind\n");
     fprintf(cgenout, "\t.fnend\n");
     free(lbl);
-#elif __arm64__
+#elif defined(__arm64__) || defined(__aarch64__)
     fprintf(cgenout ,"\tadd\tsp, sp, #%d\n", stack_required(func));
     // pop the frame pointer and link register back off the stack
     fputs("\tldp	x29, x30, [sp], #16\n", cgenout); // pop
     fputs("\tret\n", cgenout);
     fputs("\t.cfi_endproc\n", cgenout);
+    #ifdef __linux__
+        char* lbl = function_label(func);
+        fprintf(cgenout, "\t.size	%s, .-%s\n", lbl, lbl);
+        free(lbl);
+    #endif
 #else
     #error "unknown architecture"
 #endif
@@ -1245,8 +1259,12 @@ static int label_for_str_or_add(Symbol str_lit)
 
 #ifdef __x86_64__
 #   define ASM_COMMENT "# "
-#else
+#elif defined(__arm__)
 #   define ASM_COMMENT "@ "
+#elif defined(__arm64__) || defined(__aarch64__)
+#   define ASM_COMMENT "; "
+#else
+#   error "Unknown Platform"
 #endif
 #define dbg_comment(FMT, ...) do {                              \
     if (debug_codegen) {                                        \
@@ -1434,7 +1452,6 @@ static void gen_sm_unapply_pat(Pattern* pat)
         reg rs[4] = { cs0, cs1, cs2, cs3 };
         reg drs[4] = { r0, r1, r2, r3 };
         const int word_size_ctz = __builtin_ctz(WORD_SIZE);
-        fprintf(stderr, "word_size_ctz = %d\n", word_size_ctz);
         int stack_size = stack_size_of_type(pat->type);
         // stack_size >> word_size_ctz calculates the number of registers
         // required to store the tuple
@@ -2187,6 +2204,17 @@ _start:\n\
 	bl		start__0	@ will leave exit code in r0\n\
 	mov		r7, #1\n\
 	swi		0\n\
+\n\
+", cgenout);
+#elif defined(__linux__) && defined(__aarch64__)
+    fputs("\
+.text\n\
+.global _start\n\
+_start:\n\
+	mov		fp, sp		// initialize frame pointer\n\
+	bl		start__0	// will leave exit code in x0\n\
+	mov		x8, #0x5d	// exit system call\n\
+	svc		0\n\
 \n\
 ", cgenout);
 #elif defined(_WIN32) && defined(__x86_64__)

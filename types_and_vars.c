@@ -292,11 +292,6 @@ static void print_type_error(TypeExpr* expected, TypeExpr* actual)
     tprintf(stderr, "  expected: %T\n  actual: %T\n", expected, actual);
 }
 
-#define foreach(list, varname, body) \
-for (__auto_type varname = list; varname; varname = varname->next) { \
-    body \
-}
-
 __attribute__((warn_unused_result))
 __pure static _Bool solid_type(TypeExpr* type)
 {
@@ -312,10 +307,10 @@ __pure static _Bool solid_type(TypeExpr* type)
         case TYPE_CONSTRUCTOR:
             return solid_type(type->param);
         case TYPE_TUPLE:
-            foreach(type->type_list, l,
+            for (TypeExprList* l = type->type_list; l; l = l->next) {
                 if (!solid_type(l->type))
                     return 0;
-            )
+            }
             return 1;
     }
     FAIL_MISSED_CASE();
@@ -336,10 +331,10 @@ static _Bool type_uses_constraint(TypeExpr* type, int constraint_id)
       case TYPE_CONSTRUCTOR: return type_uses_constraint(type->param, constraint_id);
       case TYPE_TUPLE:
       {
-        foreach(type->type_list, l,
+        for (TypeExprList* l = type->type_list; l; l = l->next) {
             if (type_uses_constraint(l->type, constraint_id))
                 return 1;
-        )
+        }
         return 0;
       }
     }

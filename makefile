@@ -10,9 +10,11 @@ LDFLAGS=
 RTCFLAGS=-std=gnu11 -Wall -fno-omit-frame-pointer
 
 ifndef NDEBUG
+  ifeq "$(shell uname)" "Darwin"
+    RTCFLAGS += -fsanitize=address
+  endif
   ifneq "$(OS)" "Windows_NT"
     CFLAGS += -fsanitize=address
-    RTCFLAGS += -fsanitize=address
     LDFLAGS += -fsanitize=address
   endif
 else
@@ -58,7 +60,7 @@ runtime.o: runtime.c
 .PHONY: clean
 
 clean:
-	rm -f intml intml.exe *.o lex.yy.c grammar.tab.{c,h} grammar.output *.d
+	$(RM) $(TARGETS) intml.exe *.o lex.yy.c grammar.tab.{c,h} grammar.output *.d
 
 %.d: %.c $(SRC)
 	$(CC) $(CFLAGS) -MM $< > $@
