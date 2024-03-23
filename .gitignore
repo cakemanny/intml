@@ -10,6 +10,9 @@ runtime.a
 # depfiles
 *.d
 
+# ctags database
+/tags
+
 #tmp dir for temporary things in life
 /tmp
 

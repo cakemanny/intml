@@ -9,14 +9,14 @@ rst=$(tput sgr0)
 intml=../../intml
 
 expect () {
-    echo expect $1 = $2
+    echo "expect $1 = $2"
     $1
     result=$?
-    if [[ $result == $2 ]]; then
-        echo ${grn}pass${rst}
+    if [[ $result == "$2" ]]; then
+        echo "${grn}pass${rst}"
     else
-        echo FAIL: $1 = $result
-        exitcode=$((1 + $exitcode))
+        echo "FAIL: $1 = $result"
+        exitcode=$((1 + exitcode))
     fi
 }
 
@@ -45,23 +45,23 @@ expect2 () {
     code="$1"
     stmp=$(mktemp)
     otmp=$(mktemp)
-    if (echo "$code" | $intml -o $stmp -); then
-        as -o $otmp $stmp && ${LD} ${LDFLAGS} -o a.out $otmp ../../runtime.a ${LDLIBS}
+    if (echo "$code" | $intml -o "$stmp" -); then
+        as -o "$otmp" "$stmp" && ${LD} ${LDFLAGS} -o a.out "$otmp" ../../runtime.a ${LDLIBS}
         ./a.out
         result=$?
-        if [[ $result == $2 ]]; then
+        if [[ $result == "$2" ]]; then
             echo "${grn}pass${rst}: '$code'"
         else
             echo "${red}FAIL:${rst} '$code'"
             echo "  expected: $2"
             echo "  actual:   $result"
-            exitcode=$((1 + $exitcode))
+            exitcode=$((1 + exitcode))
         fi
     else
         echo "${red}FAILED${rst} to compile '$code'"
-        exitcode=$((1 + $exitcode))
+        exitcode=$((1 + exitcode))
     fi
-    rm -f a.out $otmp $stmp
+    rm -f a.out "$otmp" "$stmp"
 }
 
 expect2 "

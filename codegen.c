@@ -1164,6 +1164,9 @@ static void emit_fn_prologue(Function* func)
         // save the frame pointer and link register
         fputs("\tstp	x29, x30, [sp, #-16]!\n", cgenout); // push
         fputs("\tmov	fp, sp\n", cgenout);
+        fputs("\t.cfi_def_cfa w29, 16\n", cgenout);
+        fputs("\t.cfi_offset w30, -8\n", cgenout);
+        fputs("\t.cfi_offset w29, -16\n", cgenout);
     #else
         #error "unknown platform"
     #endif
